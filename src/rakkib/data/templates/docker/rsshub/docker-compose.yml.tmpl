@@ -1,6 +1,6 @@
 services:
   rsshub:
-    image: diygod/rsshub:latest
+    image: diygod/rsshub:chromium-bundled-2026-05-14
     container_name: rsshub
     restart: unless-stopped
     env_file:
@@ -21,7 +21,7 @@ services:
       - {{DOCKER_NET}}
 
   rsshub-browserless:
-    image: browserless/chrome:latest
+    image: browserless/chrome:1.61.1-chrome-stable
     container_name: rsshub-browserless
     restart: unless-stopped
     environment:

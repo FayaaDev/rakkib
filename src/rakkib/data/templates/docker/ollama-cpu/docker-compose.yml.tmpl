@@ -1,6 +1,6 @@
 services:
   ollama-cpu:
-    image: ${OLLAMA_CPU_IMAGE:-ollama/ollama:latest}
+    image: ${OLLAMA_CPU_IMAGE:-ollama/ollama:0.24.0}
     container_name: ollama-cpu
     restart: unless-stopped
     env_file:

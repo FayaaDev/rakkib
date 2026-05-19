@@ -168,7 +168,9 @@ def _normalize_url_path(path: object) -> str:
     return value if value.startswith("/") else f"/{value}"
 
 
-def service_url(state: State, svc: dict[str, Any], *, path: object | None = None, lan_ip: str | None = None) -> str | None:
+def service_url(
+    state: State, svc: dict[str, Any], *, path: object | None = None, lan_ip: str | None = None
+) -> str | None:
     """Return the user-facing URL for a service in the current exposure mode."""
     url_path = _normalize_url_path(path if path is not None else (svc.get("internal_access") or {}).get("path") or "/")
 
@@ -209,20 +211,24 @@ def deployed_service_urls(
             special_url = str(state.get("deployed.special_urls.openclaw") or "").strip()
             if not special_url:
                 continue
-            rows.append({
-                "service": svc_id,
-                "label": str(svc.get("name") or (svc.get("homepage") or {}).get("name") or svc_id),
-                "url": special_url,
-            })
+            rows.append(
+                {
+                    "service": svc_id,
+                    "label": str(svc.get("name") or (svc.get("homepage") or {}).get("name") or svc_id),
+                    "url": special_url,
+                }
+            )
             continue
         url = service_url(state, svc, lan_ip=lan_ip)
         if not url:
             continue
-        rows.append({
-            "service": svc_id,
-            "label": str(svc.get("name") or (svc.get("homepage") or {}).get("name") or svc_id),
-            "url": url,
-        })
+        rows.append(
+            {
+                "service": svc_id,
+                "label": str(svc.get("name") or (svc.get("homepage") or {}).get("name") or svc_id),
+                "url": url,
+            }
+        )
 
     return rows
 

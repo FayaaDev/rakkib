@@ -105,10 +105,7 @@ def _active_fields(schema: QuestionSchema, state: State) -> list[FieldDef]:
 def _field_answers(field: FieldDef, state: State) -> object:
     """Serialize the current answer shape for one active field."""
     if field.type == "summary":
-        return {
-            key: _redact_record_value(key, state.get(key))
-            for key in field.summary_fields
-        }
+        return {key: _redact_record_value(key, state.get(key)) for key in field.summary_fields}
 
     if field.type == "secret_group":
         values: dict[str, object] = {}
@@ -132,10 +129,7 @@ def _field_answers(field: FieldDef, state: State) -> object:
         record_key = field.records[0]
         return _redact_record_value(record_key, state.get(record_key))
 
-    return {
-        record_key: _redact_record_value(record_key, state.get(record_key))
-        for record_key in field.records
-    }
+    return {record_key: _redact_record_value(record_key, state.get(record_key)) for record_key in field.records}
 
 
 def _serialize_phase_summary(schema: QuestionSchema, state: State) -> dict[str, object]:
@@ -211,10 +205,7 @@ def _serialize_phase(schema: QuestionSchema, state: State) -> dict[str, object]:
         "service_catalog": _serialize_service_catalog(schema.service_catalog),
         "rules": schema.rules,
         "execution_generated_only": schema.execution_generated_only,
-        "answers": {
-            field.id: _field_answers(field, state)
-            for field in active_fields
-        },
+        "answers": {field.id: _field_answers(field, state) for field in active_fields},
     }
 
 
@@ -457,12 +448,19 @@ def build_api_router(auth: AuthManager, config: WebRuntimeConfig, run_manager: W
 
         if mode == "full_setup":
             if state.resume_phase() < 7:
-                raise HTTPException(status_code=409, detail="Complete all setup phases before starting the installer run.")
+                raise HTTPException(
+                    status_code=409, detail="Complete all setup phases before starting the installer run."
+                )
             if not state.is_confirmed():
-                raise HTTPException(status_code=409, detail="Phase 6 must be confirmed before starting the installer run.")
+                raise HTTPException(
+                    status_code=409, detail="Phase 6 must be confirmed before starting the installer run."
+                )
         elif mode == "service_sync":
             if not _deployment_succeeded(state):
-                raise HTTPException(status_code=409, detail="Complete the initial deployment before syncing services from the web dashboard.")
+                raise HTTPException(
+                    status_code=409,
+                    detail="Complete the initial deployment before syncing services from the web dashboard.",
+                )
         else:
             raise HTTPException(status_code=422, detail=f"Unknown run mode: {mode}")
 

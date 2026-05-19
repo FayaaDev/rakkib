@@ -1,6 +1,6 @@
 services:
   lobe-chat:
-    image: ${LOBE_CHAT_IMAGE:-lobehub/lobe-chat:latest}
+    image: ${LOBE_CHAT_IMAGE:-lobehub/lobe-chat:1.143.3}
     container_name: lobe-chat
     restart: unless-stopped
     env_file: .env

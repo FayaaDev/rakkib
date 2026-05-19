@@ -1,6 +1,6 @@
 services:
   cheshire-cat-ai:
-    image: ghcr.io/cheshire-cat-ai/core:latest
+    image: ghcr.io/cheshire-cat-ai/core:1.9.2
     container_name: cheshire-cat-ai
     restart: unless-stopped
     env_file:
@@ -19,7 +19,7 @@ services:
       - {{DOCKER_NET}}
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.0
     container_name: cheshire-cat-ai-qdrant
     restart: unless-stopped
     volumes:

@@ -1,6 +1,6 @@
 services:
   actual-budget:
-    image: ${ACTUAL_BUDGET_IMAGE:-actualbudget/actual-server:latest}
+    image: ${ACTUAL_BUDGET_IMAGE:-actualbudget/actual-server:25.7.1}
     container_name: actual-budget
     restart: unless-stopped
     env_file:

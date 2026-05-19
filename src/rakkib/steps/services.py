@@ -345,9 +345,7 @@ def _enforce_service_resource_requirements(state: State, svc: dict) -> None:
 
     min_disk = requirements.get("min_disk_gb")
     if min_disk is not None and free_disk_gb is not None and free_disk_gb < int(min_disk):
-        failures.append(
-            f"needs at least {int(min_disk)} GB free on {disk_scope}, current host has {free_disk_gb} GB"
-        )
+        failures.append(f"needs at least {int(min_disk)} GB free on {disk_scope}, current host has {free_disk_gb} GB")
 
     if failures:
         install_warning = str(requirements.get("install_warning") or "").strip()
@@ -375,8 +373,7 @@ def _service_render_changes(state: State, svc: dict, repo: Path, data_root: Path
     route_path = data_root / "docker" / "caddy" / "routes" / f"{svc_id}.caddy"
     route_before = _read_text_if_exists(route_path) if caddy_enabled(state) else None
     extra_before = {
-        extra["dst"]: _read_text_if_exists(data_root / extra["dst"])
-        for extra in svc.get("extra_templates", [])
+        extra["dst"]: _read_text_if_exists(data_root / extra["dst"]) for extra in svc.get("extra_templates", [])
     }
 
     with TemporaryDirectory(prefix=f"rakkib-{svc_id}-restart-") as tmpdir:
@@ -416,11 +413,11 @@ def _service_render_changes(state: State, svc: dict, repo: Path, data_root: Path
                 temp_compose_path = tmp_service_dir / "docker-compose.yml"
                 render_file(compose_tmpl, temp_compose_path, state)
                 _apply_internal_access_ports(state, svc, temp_compose_path)
-                compose_changed = _read_text_if_exists(compose_path) != _read_text_if_exists(
-                    temp_compose_path
-                )
+                compose_changed = _read_text_if_exists(compose_path) != _read_text_if_exists(temp_compose_path)
 
-            missing_data_dirs = any(not (data_root / relative_dir).exists() for relative_dir in svc.get("data_dirs", []))
+            missing_data_dirs = any(
+                not (data_root / relative_dir).exists() for relative_dir in svc.get("data_dirs", [])
+            )
             service_changed = env_changed or compose_changed or extra_changed or missing_data_dirs
 
     return {
@@ -467,24 +464,28 @@ def _validate_caddy_fragment(route_path: Path, svc_id: str) -> None:
         "{\n\tauto_https off\n}\n"
         ":80 {\n"
         f"{route_path.read_text()}\n"
-        "\thandle {\n\t\trespond \"Not found\" 404\n\t}\n"
+        '\thandle {\n\t\trespond "Not found" 404\n\t}\n'
         "}\n"
     )
     try:
         validate = docker_run(
             [
-                "run", "--rm",
-                "-v", f"{synthetic}:/etc/caddy/Caddyfile:ro",
-                "caddy:2", "caddy", "validate", "--config", "/etc/caddy/Caddyfile",
+                "run",
+                "--rm",
+                "-v",
+                f"{synthetic}:/etc/caddy/Caddyfile:ro",
+                "caddy:2",
+                "caddy",
+                "validate",
+                "--config",
+                "/etc/caddy/Caddyfile",
             ],
             check=False,
         )
     finally:
         synthetic.unlink(missing_ok=True)
     if validate.returncode != 0:
-        raise RuntimeError(
-            f"Caddy route validation failed for service {svc_id}: {validate.stderr.strip()}"
-        )
+        raise RuntimeError(f"Caddy route validation failed for service {svc_id}: {validate.stderr.strip()}")
 
 
 def _publish_cloudflare_service(state: State, svc: dict) -> None:
@@ -564,9 +565,7 @@ def _render_extra_templates(state: State, svc: dict, repo: Path, data_root: Path
         src = repo / extra["src"]
         dst = data_root / extra["dst"]
         if not src.exists():
-            raise FileNotFoundError(
-                f"Service {svc['id']} references missing extra_templates source: {src}"
-            )
+            raise FileNotFoundError(f"Service {svc['id']} references missing extra_templates source: {src}")
         _ensure_writable_output(dst)
         render_file(src, dst, state)
 
@@ -812,9 +811,7 @@ def _deploy_single_service(state: State, svc: dict, repo: Path, data_root: Path)
     try:
         compose_up(svc_dir, log_path=log_path)
     except DockerError as exc:
-        raise RuntimeError(
-            f"Service '{svc_id}' failed to start. Log: {log_path}. {exc}"
-        ) from exc
+        raise RuntimeError(f"Service '{svc_id}' failed to start. Log: {log_path}. {exc}") from exc
 
     container_name = svc.get("container_name", svc_id)
     if not health_check(container_name, timeout=int(svc.get("health_timeout", 120))):

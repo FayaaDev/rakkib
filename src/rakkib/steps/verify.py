@@ -8,7 +8,6 @@ from __future__ import annotations
 import re
 import stat
 from pathlib import Path
-from typing import Any
 
 from rakkib.service_catalog import caddy_enabled, cloudflare_enabled
 from rakkib.state import DEFAULT_STATE_FILE, State
@@ -135,9 +134,7 @@ def _print_summary(results: list[VerificationResult]) -> None:
     if failures:
         print("ACTION REQUIRED")
         print("-" * 60)
-        print(
-            "Some checks failed. Review the message above, then run `rakkib pull` again."
-        )
+        print("Some checks failed. Review the message above, then run `rakkib pull` again.")
         print("")
 
 

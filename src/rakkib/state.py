@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -13,6 +13,39 @@ from rakkib.schema import load_all_schemas
 
 DEFAULT_STATE_FILE = ".fss-state.yaml"
 _UNSET = object()
+
+# Bump when the on-disk YAML schema gains a structural change that older
+# rakkib versions cannot read transparently. Each bump must add an entry
+# to ``_MIGRATIONS`` (index i upgrades from schema_version i to i+1).
+STATE_VERSION = 1
+_MIGRATIONS: list[Callable[[dict[str, Any]], None]] = []
+
+
+def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
+    """Apply any pending schema migrations to ``raw`` in place and return it.
+
+    An empty dict is returned as-is so that loading a freshly-written empty
+    state file does not synthesise a schema_version stamp.
+    """
+    if not raw:
+        return raw
+    current = int(raw.get("schema_version", 0) or 0)
+    if current > STATE_VERSION:
+        raise RuntimeError(
+            f"State file schema_version={current} is newer than this rakkib supports "
+            f"(STATE_VERSION={STATE_VERSION}). Upgrade rakkib or remove .fss-state.yaml "
+            "to start fresh."
+        )
+    while current < STATE_VERSION:
+        if current >= len(_MIGRATIONS):
+            # No structural migration registered for this step yet — the version
+            # bump itself is enough (e.g. v0 → v1 was a metadata-only addition).
+            current += 1
+            continue
+        _MIGRATIONS[current](raw)
+        current += 1
+    raw["schema_version"] = STATE_VERSION
+    return raw
 
 
 def default_data_root(platform: str | None = None) -> Path:
@@ -66,29 +99,41 @@ class State:
         if not path.exists():
             return cls({}, path=path)
         raw = yaml.safe_load(path.read_text()) or {}
+        raw = _migrate(raw)
         return cls(raw, path=path)
 
     def save(self, path: Path | str | object = _UNSET) -> None:
-        """Persist state to YAML file."""
+        """Persist state to YAML file, atomically and durably."""
         if path is _UNSET:
             if self._path is None:
                 raise RuntimeError(
-                    "State has no save path. Load it with State.load(path) or pass "
-                    "an explicit path to save(path)."
+                    "State has no save path. Load it with State.load(path) or pass an explicit path to save(path)."
                 )
             save_path = self._path
         else:
             save_path = Path(path)
             self._path = save_path
 
-        tmp_path = save_path.with_suffix(save_path.suffix + ".tmp")
+        self._data["schema_version"] = STATE_VERSION
         data = yaml.safe_dump(self._data, sort_keys=False, allow_unicode=True)
+
+        tmp_path = save_path.with_suffix(save_path.suffix + ".tmp")
         fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as handle:
             handle.write(data)
-        tmp_path.chmod(0o600)
-        os.replace(tmp_path, save_path)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        # fsync the parent directory so the rename is durable even across a
+        # crash between rename() and the OS flushing the directory entry.
+        parent = save_path.parent
+        dir_fd = os.open(parent, os.O_RDONLY)
+        try:
+            os.replace(tmp_path, save_path)
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dot-notated read, e.g. get('cloudflare.tunnel_uuid')."""

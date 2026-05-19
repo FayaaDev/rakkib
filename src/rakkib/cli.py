@@ -5,6 +5,7 @@ Commands: init, pull, update, doctor, status, add, restart, uninstall, privilege
 
 from __future__ import annotations
 
+import copy
 import os
 import platform
 import pwd
@@ -13,10 +14,13 @@ import subprocess
 import sys
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
 from rich.console import Console
+
+if TYPE_CHECKING:
+    from rich.table import Table
 
 from rakkib.docker import DockerError, compose_down, docker_run, is_docker_permission_error
 from rakkib.doctor import (
@@ -59,7 +63,12 @@ from rakkib.steps import postgres as postgres_step
 from rakkib.steps import services as services_step
 from rakkib.steps.cloudflare import _cloudflared_bin, _show_qr
 from rakkib.tui import progress_spinner, prompt_checkbox, prompt_confirm
-from rakkib.util import checkout_dir as _checkout_dir, detect_lan_ip as _detect_lan_ip, resolve_user, web_url as _web_url
+from rakkib.util import (
+    checkout_dir as _checkout_dir,
+    detect_lan_ip as _detect_lan_ip,
+    resolve_user,
+    web_url as _web_url,
+)
 from rakkib.web.host_auth import check_host_auth_readiness
 
 console = Console()
@@ -70,8 +79,9 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 
-def _render_doctor_table(checks: list, title: str) -> "Table":
+def _render_doctor_table(checks: list, title: str) -> Table:
     from rich.table import Table
+
     table = Table(title=title, show_header=True, header_style="bold magenta")
     table.add_column("Status", style="bold", width=6)
     table.add_column("Check", style="dim", width=20)
@@ -120,9 +130,7 @@ def _run_auth_setup(ctx: click.Context) -> bool:
             try:
                 docker_run(["info"])
             except DockerError as retry_exc:
-                console.print(
-                    "[red]Docker is not ready. Run `rakkib auth`, then try again.[/red]"
-                )
+                console.print("[red]Docker is not ready. Run `rakkib auth`, then try again.[/red]")
                 console.print(f"[dim]{retry_exc or exc}[/dim]")
                 return False
         console.print("[green]Re-run `rakkib pull`.[/green]")
@@ -161,9 +169,7 @@ def _run_auth_setup(ctx: click.Context) -> bool:
         console.print("[dim]Manual setup:[/dim]")
         console.print(f"[dim]{docker_access_commands(user)}[/dim]")
         return False
-    console.print(
-        "[green]Re-run `rakkib pull`.[/green]"
-    )
+    console.print("[green]Re-run `rakkib pull`.[/green]")
     return True
 
 
@@ -210,7 +216,10 @@ def _run_steps(state: State, repo_dir: Path) -> bool:
 
             if step_name == "verify":
                 # Pass cached results so verify.run() can skip re-running each step verify.
-                state.set("_step_verify_cache", {k: {"ok": v.ok, "step": v.step, "message": v.message} for k, v in verify_cache.items()})
+                state.set(
+                    "_step_verify_cache",
+                    {k: {"ok": v.ok, "step": v.step, "message": v.message} for k, v in verify_cache.items()},
+                )
 
             run_fn(state)
 
@@ -279,7 +288,9 @@ def _select_service_for_deploy(state: State, registry: dict[str, Any], service: 
         console.print(f"[bold red]Error:[/bold red] Unknown service '{service}'.")
         return None
     if svc.get("state_bucket") == "always":
-        console.print(f"[bold red]Error:[/bold red] '{service}' is an always-installed service; use full `rakkib pull`.")
+        console.print(
+            f"[bold red]Error:[/bold red] '{service}' is an always-installed service; use full `rakkib pull`."
+        )
         return None
 
     selected_ids = _installed_service_ids(state)
@@ -296,21 +307,38 @@ def _select_service_for_deploy(state: State, registry: dict[str, Any], service: 
     return svc
 
 
+def _restore_state(state: State, snapshot: dict[str, Any]) -> None:
+    """Restore state._data to ``snapshot`` in place, preserving object identity."""
+    state._data.clear()
+    state._data.update(snapshot)
+
+
 def _run_service_pull(state: State, state_path: Path, service: str) -> bool:
     registry = services_step._load_registry()
-    svc = _select_service_for_deploy(state, registry, service)
-    if svc is None:
-        return False
 
-    state.save(state_path)
-    if not _run_pre_service_steps(state):
-        return False
-
-    console.print(f"[bold green]Installing {service}[/bold green]")
+    snapshot = copy.deepcopy(state._data)
     try:
+        svc = _select_service_for_deploy(state, registry, service)
+        if svc is None:
+            _restore_state(state, snapshot)
+            return False
+
+        state.save(state_path)
+        if not _run_pre_service_steps(state):
+            # Pre-steps run their own console output; leave state with the
+            # recorded intent so the operator can resume after fixing the
+            # blocker without reselecting the service.
+            return False
+
+        console.print(f"[bold green]Installing {service}[/bold green]")
         services_step.run_single_service(state, service)
     except Exception as exc:
         console.print(f"[bold red]  Service {service} failed:[/bold red] {exc}")
+        _restore_state(state, snapshot)
+        try:
+            state.save(state_path)
+        except Exception as save_exc:
+            console.print(f"[bold red]  Rollback save failed:[/bold red] {save_exc}")
         return False
 
     _persist_deployed_selection(state)
@@ -320,13 +348,24 @@ def _run_service_pull(state: State, state_path: Path, service: str) -> bool:
     return True
 
 
-def _sync_services_to_state_selection(state: State, state_path: Path) -> bool:
+def _sync_services_to_state_selection(
+    state: State,
+    state_path: Path,
+    *,
+    rollback_snapshot: dict[str, Any] | None = None,
+    fallback_previous_selection: tuple[list[str], list[str]] | None = None,
+) -> bool:
     registry = services_step._load_registry()
     desired_foundation, desired_selected = _selected_service_lists(state)
     desired_ids = set(desired_foundation)
     desired_ids.update(desired_selected)
 
-    previous_foundation, previous_selected = _deployed_service_lists(state)
+    if state.get("deployed.exists", False):
+        previous_foundation, previous_selected = _deployed_service_lists(state)
+    elif fallback_previous_selection is not None:
+        previous_foundation, previous_selected = fallback_previous_selection
+    else:
+        previous_foundation, previous_selected = [], []
     previous_ids = set(previous_foundation)
     previous_ids.update(previous_selected)
 
@@ -337,35 +376,73 @@ def _sync_services_to_state_selection(state: State, state_path: Path) -> bool:
             console.print(f"  - {error}")
         return False
 
-    with progress_spinner("Applying service changes..."):
-        previous_state = State({
-            "foundation_services": previous_foundation,
-            "selected_services": previous_selected,
-        })
-        removal_order = [
-            svc["id"]
-            for svc in reversed(selected_service_defs(previous_state, registry))
-            if svc["id"] in (previous_ids - desired_ids)
-        ]
-        for svc_id in removal_order:
-            services_step.remove_single_service(state, svc_id)
+    snapshot = copy.deepcopy(rollback_snapshot if rollback_snapshot is not None else state._data)
+    successfully_added: list[str] = []
+    added_in_progress: str | None = None
+    successfully_removed: list[str] = []
+    added_set = desired_ids - previous_ids
+    postgres_cleanup_ids: set[str] = set()
 
-        _apply_service_selection(state, registry, desired_ids)
-        services_step._generate_missing_secrets(state)
-        if _postgres_sync_needed(registry, previous_ids, desired_ids):
-            postgres_step.run(state)
-
-        added = sorted(desired_ids - previous_ids)
-        if added:
-            for svc_id in added:
-                services_step.run_single_service(state, svc_id)
-        else:
-            data_root = state.data_root
-            if caddy_enabled(state):
-                services_step._reload_caddy(data_root)
-            services_step.sync_shared_artifacts(
-                state, services_step._repo_dir(), data_root, registry
+    try:
+        with progress_spinner("Applying service changes..."):
+            previous_state = State(
+                {
+                    "foundation_services": previous_foundation,
+                    "selected_services": previous_selected,
+                }
             )
+            removal_order = [
+                svc["id"]
+                for svc in reversed(selected_service_defs(previous_state, registry))
+                if svc["id"] in (previous_ids - desired_ids)
+            ]
+
+            _apply_service_selection(state, registry, desired_ids)
+            services_step._generate_missing_secrets(state)
+            if _postgres_sync_needed(registry, previous_ids, desired_ids):
+                postgres_cleanup_ids = set(added_set)
+                postgres_step.run(state)
+
+            added = [svc["id"] for svc in registry["services"] if svc["id"] in added_set]
+            if added:
+                for svc_id in added:
+                    added_in_progress = svc_id
+                    services_step.run_single_service(state, svc_id)
+                    successfully_added.append(svc_id)
+                    added_in_progress = None
+
+            for svc_id in removal_order:
+                services_step.remove_single_service(state, svc_id)
+                successfully_removed.append(svc_id)
+
+            if removal_order or not added:
+                data_root = state.data_root
+                if caddy_enabled(state):
+                    services_step._reload_caddy(data_root)
+                services_step.sync_shared_artifacts(state, services_step._repo_dir(), data_root, registry)
+    except Exception as exc:
+        console.print(f"[bold red]Service sync failed:[/bold red] {exc}")
+        # Best-effort cleanup of services we created during this run.
+        cleanup_ids = list(successfully_added)
+        if added_in_progress is not None and added_in_progress not in cleanup_ids:
+            cleanup_ids.append(added_in_progress)
+        for svc_id in cleanup_ids:
+            try:
+                services_step.remove_single_service(state, svc_id)
+            except Exception as remove_exc:
+                console.print(f"[dim]  rollback: failed to remove {svc_id}: {remove_exc}[/dim]")
+        _drop_added_postgres_resources(registry, postgres_cleanup_ids - set(cleanup_ids))
+        _restore_state(state, snapshot)
+        try:
+            state.save(state_path)
+        except Exception as save_exc:
+            console.print(f"[bold red]  Rollback save failed:[/bold red] {save_exc}")
+        for svc_id in reversed(successfully_removed):
+            try:
+                services_step.run_single_service(state, svc_id)
+            except Exception as restore_exc:
+                console.print(f"[dim]  rollback: failed to restore {svc_id}: {restore_exc}[/dim]")
+        return False
 
     _persist_deployed_selection(state)
     state.save(state_path)
@@ -405,10 +482,12 @@ def _cleanup_previous_hosting_mode(previous_state: State, new_state: State) -> N
         f"[yellow]Hosting mode changed from {previous_mode} to {new_mode}; removing previously hosted services first.[/yellow]"
     )
     with progress_spinner("Removing previous hosting deployment..."):
-        previous_selection_state = State({
-            "foundation_services": previous_foundation,
-            "selected_services": previous_selected,
-        })
+        previous_selection_state = State(
+            {
+                "foundation_services": previous_foundation,
+                "selected_services": previous_selected,
+            }
+        )
         removal_order = [
             svc["id"]
             for svc in reversed(selected_service_defs(previous_selection_state, registry))
@@ -433,6 +512,19 @@ def _postgres_sync_needed(registry: dict[str, Any], previous_ids: set[str], desi
     changed_ids = previous_ids ^ desired_ids
     candidate_ids = changed_ids if changed_ids else desired_ids
     return any(bool((by_id.get(svc_id) or {}).get("postgres")) for svc_id in candidate_ids)
+
+
+def _drop_added_postgres_resources(registry: dict[str, Any], service_ids: set[str]) -> None:
+    """Best-effort cleanup for Postgres resources created during a failed sync."""
+    by_id = {svc["id"]: svc for svc in registry["services"]}
+    for svc_id in sorted(service_ids):
+        svc = by_id.get(svc_id) or {}
+        if not svc.get("postgres"):
+            continue
+        try:
+            services_step._drop_service_postgres_resources(svc)
+        except Exception as drop_exc:
+            console.print(f"[dim]  rollback: failed to drop Postgres resources for {svc_id}: {drop_exc}[/dim]")
 
 
 def _run_best_effort(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -601,7 +693,9 @@ def _remove_rakkib_docker(state: State, registry: dict[str, Any]) -> None:
         for compose_file in sorted(docker_root.glob("*/docker-compose.yml")):
             compose_dir = compose_file.parent
             try:
-                compose_down(compose_dir, volumes=True, log_path=data_root / "logs" / f"uninstall-{compose_dir.name}.log")
+                compose_down(
+                    compose_dir, volumes=True, log_path=data_root / "logs" / f"uninstall-{compose_dir.name}.log"
+                )
                 console.print(f"[green]Removed Docker compose project {compose_dir.name}[/green]")
             except Exception as exc:
                 console.print(f"[yellow]Could not remove Docker compose project {compose_dir.name}: {exc}[/yellow]")
@@ -625,7 +719,11 @@ def _run_remove_hooks(state: State, registry: dict[str, Any]) -> None:
         svc_id = svc.get("id")
         if not svc_id:
             continue
-        has_artifacts = (data_root / "docker" / svc_id).exists() or (data_root / "data" / svc_id).exists() or bool(svc.get("host_service"))
+        has_artifacts = (
+            (data_root / "docker" / svc_id).exists()
+            or (data_root / "data" / svc_id).exists()
+            or bool(svc.get("host_service"))
+        )
         if not has_artifacts:
             continue
         try:
@@ -715,10 +813,7 @@ def pull(ctx: click.Context, service: str | None) -> None:
         services_step._ensure_service_runtime_env(state)
 
     if not service and not state.is_confirmed():
-        console.print(
-            "[bold red]State is not confirmed.[/bold red] "
-            "Run [bold]rakkib init[/bold] first."
-        )
+        console.print("[bold red]State is not confirmed.[/bold red] Run [bold]rakkib init[/bold] first.")
         return
 
     if not ensure_prereqs(state, console=console, cloudflared_bin=_cloudflared_bin()):
@@ -751,7 +846,9 @@ def update(ctx: click.Context) -> None:
     console.print("[bold green]Rakkib update[/bold green]")
 
     try:
-        branch_result = subprocess.run(["git", "branch", "--show-current"], cwd=repo_dir, capture_output=True, text=True)
+        branch_result = subprocess.run(
+            ["git", "branch", "--show-current"], cwd=repo_dir, capture_output=True, text=True
+        )
         if branch_result.returncode != 0:
             raise subprocess.CalledProcessError(
                 branch_result.returncode,
@@ -762,7 +859,9 @@ def update(ctx: click.Context) -> None:
         branch = branch_result.stdout.strip()
         if not branch:
             console.print("[bold red]Update failed:[/bold red] checkout is in detached HEAD state.")
-            console.print("[yellow]Reinstall Rakkib with `bash install.sh` or switch to a branch before updating.[/yellow]")
+            console.print(
+                "[yellow]Reinstall Rakkib with `bash install.sh` or switch to a branch before updating.[/yellow]"
+            )
             ctx.exit(1)
 
         for command in (["git", "fetch", "origin", branch], ["git", "pull", "--ff-only", "origin", branch]):
@@ -814,11 +913,18 @@ def doctor(ctx: click.Context, json_output: bool, interactive: bool) -> None:
                     )
                     fix_result = None
                     if check.name == "docker":
-                        answer = click.prompt("Attempt to fix docker?", type=click.Choice(["y", "n"]), default="n", show_default=False)
+                        answer = click.prompt(
+                            "Attempt to fix docker?", type=click.Choice(["y", "n"]), default="n", show_default=False
+                        )
                         if answer == "y":
                             fix_result = attempt_fix_docker()
                     elif check.name == "cloudflared_cli":
-                        answer = click.prompt("Attempt to fix cloudflared?", type=click.Choice(["y", "n"]), default="n", show_default=False)
+                        answer = click.prompt(
+                            "Attempt to fix cloudflared?",
+                            type=click.Choice(["y", "n"]),
+                            default="n",
+                            show_default=False,
+                        )
                         if answer == "y":
                             fix_result = attempt_fix_cloudflared()
                     elif check.name == "public_ports":
@@ -855,9 +961,7 @@ def status(ctx: click.Context) -> None:
     state = State.load(state_path)
 
     if not state.is_confirmed():
-        console.print(
-            "[yellow]No confirmed deployment state found. Run `rakkib init` to start.[/yellow]"
-        )
+        console.print("[yellow]No confirmed deployment state found. Run `rakkib init` to start.[/yellow]")
         return
 
     domain = state.get("domain", "") or ""
@@ -905,9 +1009,9 @@ def status(ctx: click.Context) -> None:
     # Available services
     console.rule("[bold]Available Services[/bold]")
     available = [
-        svc for svc in registry["services"]
-        if svc.get("state_bucket") in ("foundation_services", "selected_services")
-        and svc["id"] not in installed_ids
+        svc
+        for svc in registry["services"]
+        if svc.get("state_bucket") in ("foundation_services", "selected_services") and svc["id"] not in installed_ids
     ]
     if available:
         for svc in available:
@@ -928,8 +1032,7 @@ def add(ctx: click.Context, service: str | None, service_option: str | None, yes
 
     if service and service_option and service != service_option:
         console.print(
-            "[bold red]Error:[/bold red] Provide the service either as an argument "
-            "or with --service, not both."
+            "[bold red]Error:[/bold red] Provide the service either as an argument or with --service, not both."
         )
         sys.exit(1)
     service = service_option or service
@@ -993,42 +1096,19 @@ def add(ctx: click.Context, service: str | None, service_option: str | None, yes
     else:
         console.print("[yellow]No selection changes; refreshing selected services.[/yellow]")
 
-    with progress_spinner("Applying service changes..."):
-        previous_state = State({
-            "foundation_services": list(state.get("foundation_services", []) or []),
-            "selected_services": list(state.get("selected_services", []) or []),
-        })
-        removal_order = [
-            svc["id"]
-            for svc in reversed(selected_service_defs(previous_state, registry))
-            if svc["id"] in removed
-        ]
-        for svc_id in removal_order:
-            services_step.remove_single_service(state, svc_id)
+    rollback_snapshot = copy.deepcopy(state._data)
+    fallback_previous_selection = _selected_service_lists(state)
+    _apply_service_selection(state, registry, selected_ids)
+    if planned_subdomains is not None:
+        _apply_planned_subdomains(state, registry, planned_subdomains)
 
-        _apply_service_selection(state, registry, selected_ids)
-        if planned_subdomains is not None:
-            _apply_planned_subdomains(state, registry, planned_subdomains)
-        services_step._generate_missing_secrets(state)
-        state.save(state_path)
-
-        if _postgres_sync_needed(registry, old_selected, selected_ids):
-            postgres_step.run(state)
-        if service:
-            services_step.run_single_service(state, service)
-        elif added:
-            for svc_id in added:
-                services_step.run_single_service(state, svc_id)
-        else:
-            # Removals-only or no changes — reload caddy to apply route changes and sync
-            data_root = state.data_root
-            if caddy_enabled(state):
-                services_step._reload_caddy(data_root)
-            services_step.sync_shared_artifacts(
-                state, services_step._repo_dir(), data_root, services_step._load_registry()
-            )
-        _persist_deployed_selection(state)
-        state.save(state_path)
+    if not _sync_services_to_state_selection(
+        state,
+        state_path,
+        rollback_snapshot=rollback_snapshot,
+        fallback_previous_selection=fallback_previous_selection,
+    ):
+        ctx.exit(1)
 
     console.print("[bold green]Service selection synced successfully.[/bold green]")
     deployed_ids: list[str] | None = None
@@ -1146,14 +1226,14 @@ def remove(ctx: click.Context, service: str | None, yes: bool) -> None:
     if yes:
         console.print("[dim]Confirmation skipped because --yes was provided.[/dim]")
 
-    previous_state = State({
-        "foundation_services": foundation_list,
-        "selected_services": selected_list,
-    })
+    previous_state = State(
+        {
+            "foundation_services": foundation_list,
+            "selected_services": selected_list,
+        }
+    )
     removal_order = [
-        svc["id"]
-        for svc in reversed(selected_service_defs(previous_state, registry))
-        if svc["id"] in remove_ids
+        svc["id"] for svc in reversed(selected_service_defs(previous_state, registry)) if svc["id"] in remove_ids
     ]
     if service and service not in removal_order:
         removal_order.append(service)
@@ -1245,11 +1325,7 @@ def restart(ctx: click.Context, service: str | None, restart_all: bool) -> None:
 
 
 @cli.command()
-@click.confirmation_option(
-    prompt=(
-        "Remove Rakkib, its services, saved state, and local data?"
-    )
-)
+@click.confirmation_option(prompt=("Remove Rakkib, its services, saved state, and local data?"))
 @click.pass_context
 def uninstall(ctx: click.Context) -> None:
     """Remove Rakkib-managed host, Docker, Cloudflare, and data-root artifacts."""
@@ -1377,7 +1453,9 @@ def web(
     if lan_url:
         console.print(f"[dim]LAN:[/dim] {lan_url}")
     elif lan and not lan_ip:
-        console.print("[yellow]LAN mode is enabled, but the primary LAN IP could not be detected automatically.[/yellow]")
+        console.print(
+            "[yellow]LAN mode is enabled, but the primary LAN IP could not be detected automatically.[/yellow]"
+        )
 
     if token_auth_enabled:
         console.print("[dim]Token auth:[/dim] required")
@@ -1417,9 +1495,7 @@ def privileged_check() -> None:
 @click.option("--data-root", type=str, default="")
 @click.option("--admin-user", type=str, default="")
 @click.pass_context
-def privileged_ensure_layout(
-    ctx: click.Context, state_path: Path, data_root: str, admin_user: str
-) -> None:
+def privileged_ensure_layout(ctx: click.Context, state_path: Path, data_root: str, admin_user: str) -> None:
     """Create the base Rakkib data directories."""
     state = State.load(state_path)
     if not data_root:
@@ -1461,9 +1537,7 @@ def privileged_ensure_layout(
 @click.option("--admin-user", type=str, default="")
 @click.option("--repo-dir", type=click.Path(path_type=Path), default="")
 @click.pass_context
-def privileged_fix_repo_owner(
-    ctx: click.Context, state_path: Path, admin_user: str, repo_dir: Path
-) -> None:
+def privileged_fix_repo_owner(ctx: click.Context, state_path: Path, admin_user: str, repo_dir: Path) -> None:
     """Assign the repo back to the admin user."""
     state = State.load(state_path)
     user = _resolve_admin_user(state, admin_user)
@@ -1481,5 +1555,7 @@ def privileged_fix_repo_owner(
             shutil.chown(os.path.join(root, f), user=user, group=None)
     shutil.chown(repo_dir, user=user, group=None)
     console.print(f"[green]Repo ownership updated to {user}.[/green]")
+
+
 if __name__ == "__main__":
     cli()

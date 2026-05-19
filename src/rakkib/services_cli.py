@@ -74,7 +74,11 @@ def resource_warning_suffix(svc: dict[str, Any]) -> str:
     if disk_target is not None:
         parts.append(f"{int(disk_target)} GB disk")
 
-    qualifier = "recommended" if requirements.get("recommended_ram_mb") or requirements.get("recommended_disk_gb") else "minimum"
+    qualifier = (
+        "recommended"
+        if requirements.get("recommended_ram_mb") or requirements.get("recommended_disk_gb")
+        else "minimum"
+    )
     return f" [heavy: {', '.join(parts)} {qualifier}]"
 
 
@@ -128,7 +132,8 @@ def _append_bucket_choices(
     options: PickerOptions,
 ) -> None:
     bucket_services = [
-        svc for svc in registry["services"]
+        svc
+        for svc in registry["services"]
         if svc.get("state_bucket") == bucket
         and not (svc["id"] == "caddy" and not caddy_enabled(state))
         and not (svc["id"] == "cloudflared" and not cloudflare_enabled(state))
@@ -157,7 +162,8 @@ def build_service_choices(state: State, registry: dict[str, Any], options: Picke
     _append_bucket_choices(choices, "Foundation Bundle", StateBucket.FOUNDATION_SERVICES, registry, state, options)
 
     optional_services = [
-        svc for svc in registry["services"]
+        svc
+        for svc in registry["services"]
         if svc.get("state_bucket") == StateBucket.SELECTED_SERVICES
         and (not options.include_only_active or svc["id"] in options.active_ids)
     ]
@@ -199,9 +205,7 @@ def build_restart_choices(state: State, registry: dict[str, Any]) -> list[Choice
     foundation, selected = deployed_service_lists(state)
     active_ids = set(foundation)
     active_ids.update(selected)
-    active_ids.update(
-        svc["id"] for svc in registry["services"] if svc.get("state_bucket") == StateBucket.ALWAYS
-    )
+    active_ids.update(svc["id"] for svc in registry["services"] if svc.get("state_bucket") == StateBucket.ALWAYS)
     return build_service_choices(
         state,
         registry,

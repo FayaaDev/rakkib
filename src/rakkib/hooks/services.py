@@ -41,6 +41,7 @@ def _coerce_hook_context(ctx: HookContext | object, *legacy_args) -> HookContext
     svc, repo, data_root, log_path, registry = legacy_args
     return HookContext(ctx, svc, repo, data_root, log_path, registry)
 
+
 _KUMA_MANAGED_PREFIX = "Managed by Rakkib (service: "
 _OPENCLAW_INSTALL_URL = "https://openclaw.ai/install.sh"
 _CLAUDE_INSTALL_URL = "https://claude.ai/install.sh"
@@ -144,8 +145,10 @@ def codex_install(ctx: HookContext, *legacy_args) -> None:
     _ensure_node_and_npm()
 
     # Install into the user's ~/.local so we don't need root-level npm globals.
-    _run_as_service_user(ctx.state, ["bash", "-lc", "npm config set prefix \"$HOME/.local\""], timeout=120)
-    _run_as_service_user(ctx.state, ["bash", "-lc", "npm i -g @openai/codex"], timeout=900, timeout_label="npm i -g @openai/codex")
+    _run_as_service_user(ctx.state, ["bash", "-lc", 'npm config set prefix "$HOME/.local"'], timeout=120)
+    _run_as_service_user(
+        ctx.state, ["bash", "-lc", "npm i -g @openai/codex"], timeout=900, timeout_label="npm i -g @openai/codex"
+    )
 
 
 def codex_uninstall(ctx: HookContext, *legacy_args) -> None:
@@ -281,8 +284,13 @@ def _run_as_user(
 
     try:
         return subprocess.run(
-            run_cmd, capture_output=True, text=True, check=check, env=env,
-            timeout=timeout, stdin=subprocess.DEVNULL,
+            run_cmd,
+            capture_output=True,
+            text=True,
+            check=check,
+            env=env,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as exc:
         label = timeout_label or " ".join(command)
@@ -342,7 +350,9 @@ def _resolve_openclaw_bin(state) -> Path | None:
     return _resolve_openclaw_bin_for_user(state, admin_user)
 
 
-def _run_openclaw(state, openclaw_bin: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_openclaw(
+    state, openclaw_bin: Path, args: list[str], *, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     return _run_as_service_user(
         state,
         [str(openclaw_bin), *args],
@@ -371,7 +381,7 @@ def _openclaw_paths(home_dir: Path) -> tuple[Path, Path]:
 
 
 def _purge_openclaw_user_artifacts(username: str, home_dir: Path, user_uid: int) -> None:
-    script = r'''
+    script = r"""
 set +e
 if command -v openclaw >/dev/null 2>&1; then
   openclaw gateway stop >/dev/null 2>&1 || true
@@ -391,12 +401,11 @@ fi
 rm -f "$HOME/.local/bin/openclaw" "$HOME/.config/systemd/user/default.target.wants/openclaw-gateway.service"
 rm -rf "$HOME/.openclaw" "$HOME/.config/openclaw" "$HOME/.local/share/openclaw" "$HOME/.cache/openclaw" "$HOME/openclaw"
 systemctl --user daemon-reload >/dev/null 2>&1 || true
-'''
+"""
     result = _run_as_user(username, home_dir, user_uid, ["bash", "-lc", script], check=False, timeout=600)
     if result.returncode != 0:
         raise RuntimeError(
-            "OpenClaw artifact purge failed. "
-            f"Command output: {result.stdout.strip() or result.stderr.strip()}"
+            f"OpenClaw artifact purge failed. Command output: {result.stdout.strip() or result.stderr.strip()}"
         )
 
 
@@ -413,7 +422,9 @@ def _openclaw_dashboard_url(state) -> str | None:
         return None
     domain = str(state.get("domain") or "").strip()
     subdomain = str(state.get("subdomains.openclaw") or state.get("OPENCLAW_SUBDOMAIN") or "claw").strip()
-    base = f"https://{subdomain}.{domain}" if caddy_enabled(state) and domain and subdomain else "http://127.0.0.1:18789"
+    base = (
+        f"https://{subdomain}.{domain}" if caddy_enabled(state) and domain and subdomain else "http://127.0.0.1:18789"
+    )
     return f"{base}/?token={token}"
 
 
@@ -434,6 +445,7 @@ def _openclaw_wait_for_pairing(state, openclaw_bin: Path) -> None:
         "  [bold]OpenClaw:[/bold] Open the dashboard and click [bold]Connect[/bold] to pair your device."
         f" Waiting up to {_OPENCLAW_PAIRING_TIMEOUT}s..."
     )
+
     def poll_pairing() -> bool:
         list_result = _run_openclaw(state, openclaw_bin, ["devices", "list", "--json"], check=False)
         if list_result.returncode != 0:
@@ -524,8 +536,7 @@ def _ensure_openclaw_gateway_bind(state, openclaw_bin: Path) -> None:
     bind = _run_openclaw(state, openclaw_bin, ["config", "set", "gateway.bind", _OPENCLAW_GATEWAY_BIND], check=False)
     if bind.returncode != 0:
         raise RuntimeError(
-            "OpenClaw gateway bind update failed. "
-            f"Command output: {bind.stdout.strip() or bind.stderr.strip()}"
+            f"OpenClaw gateway bind update failed. Command output: {bind.stdout.strip() or bind.stderr.strip()}"
         )
 
 
@@ -565,10 +576,12 @@ def _homepage_services_content(state, registry: dict) -> str:
         block_lines = [f"    - {homepage['name']}:"]
         if href:
             block_lines.append(f"        href: {href}")
-        block_lines.extend([
-            f"        description: {homepage['description']}",
-            f"        icon: {homepage['icon']}",
-        ])
+        block_lines.extend(
+            [
+                f"        description: {homepage['description']}",
+                f"        icon: {homepage['icon']}",
+            ]
+        )
         block = "\n".join(block_lines)
         groups.setdefault(homepage["category"], []).append(block)
 
@@ -691,9 +704,7 @@ def _service_postgres_credentials(state, svc: dict) -> tuple[str, str, str]:
     db_name = postgres.get("db", role)
     password_key = postgres.get("password_key")
     if not password_key:
-        raise RuntimeError(
-            f"postgres login pre-flight is configured for service '{svc['id']}' without a password_key"
-        )
+        raise RuntimeError(f"postgres login pre-flight is configured for service '{svc['id']}' without a password_key")
 
     password = state.get(f"secrets.values.{password_key}")
     if password is None:
@@ -800,10 +811,7 @@ def openclaw_install(ctx: HookContext, *legacy_args) -> None:
                 timeout_label="OpenClaw installer",
             )
         if install.returncode != 0:
-            raise RuntimeError(
-                "OpenClaw installation failed. "
-                f"Command output: {_openclaw_output(install)}"
-            )
+            raise RuntimeError(f"OpenClaw installation failed. Command output: {_openclaw_output(install)}")
         openclaw_bin = _resolve_openclaw_bin(ctx.state)
         if openclaw_bin is None:
             raise RuntimeError(
@@ -814,8 +822,7 @@ def openclaw_install(ctx: HookContext, *legacy_args) -> None:
     version = _run_openclaw(ctx.state, openclaw_bin, ["--version"], check=False)
     if version.returncode != 0:
         raise RuntimeError(
-            "OpenClaw CLI was found but `openclaw --version` failed. "
-            f"Command output: {_openclaw_output(version)}"
+            f"OpenClaw CLI was found but `openclaw --version` failed. Command output: {_openclaw_output(version)}"
         )
 
     _, home_dir, _ = _service_admin_user(ctx.state)
@@ -850,10 +857,7 @@ def openclaw_install(ctx: HookContext, *legacy_args) -> None:
         )
     if onboard.returncode != 0:
         if not (config_path.exists() and service_path.exists()):
-            raise RuntimeError(
-                "OpenClaw onboarding failed. "
-                f"Command output: {_openclaw_output(onboard)}"
-            )
+            raise RuntimeError(f"OpenClaw onboarding failed. Command output: {_openclaw_output(onboard)}")
 
     _ensure_openclaw_gateway_bind(ctx.state, openclaw_bin)
     _ensure_openclaw_control_ui_allowed_origins(ctx.state, openclaw_bin)
@@ -864,23 +868,19 @@ def openclaw_gateway_restart(ctx: HookContext, *legacy_args) -> None:
     ctx = _coerce_hook_context(ctx, *legacy_args)
     openclaw_bin = _resolve_openclaw_bin(ctx.state)
     if openclaw_bin is None:
-        raise RuntimeError("OpenClaw gateway restart requested but the `openclaw` CLI is not installed for the admin user.")
+        raise RuntimeError(
+            "OpenClaw gateway restart requested but the `openclaw` CLI is not installed for the admin user."
+        )
 
     with progress_spinner("Installing OpenClaw gateway service..."):
         install = _run_openclaw(ctx.state, openclaw_bin, ["gateway", "install", "--force"], check=False)
     if install.returncode != 0:
-        raise RuntimeError(
-            "OpenClaw gateway install failed. "
-            f"Command output: {_openclaw_output(install)}"
-        )
+        raise RuntimeError(f"OpenClaw gateway install failed. Command output: {_openclaw_output(install)}")
 
     with progress_spinner("Restarting OpenClaw gateway..."):
         restart = _run_openclaw(ctx.state, openclaw_bin, ["gateway", "restart"], check=False)
     if restart.returncode != 0:
-        raise RuntimeError(
-            "OpenClaw gateway restart failed. "
-            f"Command output: {_openclaw_output(restart)}"
-        )
+        raise RuntimeError(f"OpenClaw gateway restart failed. Command output: {_openclaw_output(restart)}")
 
     if not _openclaw_gateway_healthcheck():
         status = _run_openclaw(ctx.state, openclaw_bin, ["gateway", "status", "--require-rpc"], check=False)

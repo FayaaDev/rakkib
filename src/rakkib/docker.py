@@ -29,12 +29,9 @@ class DockerError(Exception):
 
 
 DOCKER_PERMISSION_HINT_LINUX = (
-    "Docker needs permission for this user. Run `rakkib auth`, then open a new shell "
-    "and try again."
+    "Docker needs permission for this user. Run `rakkib auth`, then open a new shell and try again."
 )
-DOCKER_PERMISSION_HINT_MAC = (
-    "Docker is not ready. Run `rakkib auth`, then try again."
-)
+DOCKER_PERMISSION_HINT_MAC = "Docker is not ready. Run `rakkib auth`, then try again."
 
 
 def _docker_timeout() -> int:
@@ -245,13 +242,8 @@ def create_network(network_name: str, driver: str = "bridge") -> None:
 
 def is_docker_permission_error(text: str) -> bool:
     lower = text.lower()
-    return (
-        "permission denied" in lower
-        and (
-            "docker.sock" in lower
-            or "docker daemon socket" in lower
-            or "/var/run/docker" in lower
-        )
+    return "permission denied" in lower and (
+        "docker.sock" in lower or "docker daemon socket" in lower or "/var/run/docker" in lower
     )
 
 

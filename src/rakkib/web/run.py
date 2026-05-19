@@ -261,9 +261,7 @@ class WebRunManager:
             "running": self._record.status == "running",
             "can_start": self._record.status != "running",
             "log_tail": log_tail,
-            "attention": _cloudflare_attention_from_lines(log_tail)
-            if self._record.status == "running"
-            else None,
+            "attention": _cloudflare_attention_from_lines(log_tail) if self._record.status == "running" else None,
         }
 
     def _initial_record(self) -> RunRecord:

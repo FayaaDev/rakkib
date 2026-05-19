@@ -13,7 +13,7 @@ from questionary import Choice
 from rich.console import Console
 
 from rakkib.host_platform import ensure_state_platform
-from rakkib.normalize import apply_normalize, eval_when, resolve_numeric_aliases
+from rakkib.normalize import apply_normalize, eval_when
 from rakkib.schema import FieldDef, QuestionSchema, load_all_schemas
 from rakkib.state import State, subdomain_placeholder_key
 from rakkib.service_catalog import (
@@ -108,9 +108,7 @@ def _run_phase(schema: QuestionSchema, state: State) -> None:
     _enforce_rules(schema, state)
 
 
-def _run_field(
-    field: FieldDef, state: State, schema: QuestionSchema | None = None
-) -> None:
+def _run_field(field: FieldDef, state: State, schema: QuestionSchema | None = None) -> None:
     """Process one field: detect, derive, prompt, validate, normalize, record."""
     if field.when and not eval_when(field.when, state):
         return
@@ -209,9 +207,7 @@ def _handle_service_catalog(schema: QuestionSchema, state: State) -> None:
 
     optional_groups: dict[str, list[dict[str, Any]]] = {}
     for item in optional_items:
-        optional_groups.setdefault(_service_catalog_category(item["slug"], registry), []).append(
-            item
-        )
+        optional_groups.setdefault(_service_catalog_category(item["slug"], registry), []).append(item)
 
     for category, items in optional_groups.items():
         choices.append(
@@ -225,7 +221,9 @@ def _handle_service_catalog(schema: QuestionSchema, state: State) -> None:
             slug = item["slug"]
             label = item.get("label", slug)
             svc = by_id.get(slug, {"id": slug})
-            choices.append(Choice(title=f"  {append_service_suffixes(label, svc)}", value=slug, checked=slug in prior_selected))
+            choices.append(
+                Choice(title=f"  {append_service_suffixes(label, svc)}", value=slug, checked=slug in prior_selected)
+            )
 
     if host_items:
         choices.append(Choice(title="━━ Host Addons ━━", value="__header_host__", disabled=True))
@@ -233,7 +231,9 @@ def _handle_service_catalog(schema: QuestionSchema, state: State) -> None:
             slug = item["slug"]
             label = item.get("label", slug)
             svc = by_id.get(slug, {"id": slug})
-            choices.append(Choice(title=f"  {append_service_suffixes(label, svc)}", value=slug, checked=slug in prior_host_addons))
+            choices.append(
+                Choice(title=f"  {append_service_suffixes(label, svc)}", value=slug, checked=slug in prior_host_addons)
+            )
 
     console.print("\n[bold]=== Service Selection ===[/bold]\n")
 
@@ -496,9 +496,7 @@ def _prompt_single_select(field: FieldDef, state: State) -> str:
             choices.append(Choice(title=title, value=canonical))
 
     default_choice = (
-        default
-        if isinstance(default, str) and default in values and default not in disabled_values
-        else None
+        default if isinstance(default, str) and default in values and default not in disabled_values else None
     )
     choices.append(_exit_choice())
     result = prompt_select(prompt, choices=choices, default=default_choice)
@@ -591,9 +589,7 @@ def _handle_summary(field: FieldDef, state: State) -> None:
     console.print()
 
 
-def _handle_repeat(
-    field: FieldDef, state: State, schema: QuestionSchema | None
-) -> None:
+def _handle_repeat(field: FieldDef, state: State, schema: QuestionSchema | None) -> None:
     """Handle repeat_for fields (e.g., subdomains)."""
     repeat_for = field.repeat_for
 
@@ -620,9 +616,7 @@ def _handle_repeat(
 
 def _build_subdomain_defaults(items: list[dict[str, Any]], state: State) -> None:
     """Populate default subdomains for currently selected services only."""
-    selected_ids = set(state.get("foundation_services", []) or []) | set(
-        state.get("selected_services", []) or []
-    )
+    selected_ids = set(state.get("foundation_services", []) or []) | set(state.get("selected_services", []) or [])
 
     for item in items:
         slug = str(item.get("slug") or "")
@@ -685,18 +679,14 @@ def _get_default(field: FieldDef, state: State) -> Any:
                     if cmd == "SUDO_USER":
                         return os.environ.get("SUDO_USER", "")
                     try:
-                        result = subprocess.run(
-                            _split_schema_command(cmd), shell=False, capture_output=True, text=True
-                        )
+                        result = subprocess.run(_split_schema_command(cmd), shell=False, capture_output=True, text=True)
                         return result.stdout.strip()
                     except Exception:
                         return ""
             elif platform == "mac" and "mac" in host_default:
                 cmd = host_default["mac"]
                 try:
-                    result = subprocess.run(
-                        _split_schema_command(cmd), shell=False, capture_output=True, text=True
-                    )
+                    result = subprocess.run(_split_schema_command(cmd), shell=False, capture_output=True, text=True)
                     return result.stdout.strip()
                 except Exception:
                     return ""

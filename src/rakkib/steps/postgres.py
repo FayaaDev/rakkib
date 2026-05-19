@@ -141,13 +141,12 @@ def _apply_sql(sql: str, data_root: Path | None = None) -> None:
         stderr = result.stderr.strip()
         hint = _permission_denied_hint(stderr, data_root)
         detail = f"{stderr}\n\n{hint}" if hint else stderr
-        raise RuntimeError(
-            f"psql failed (rc={result.returncode}):\n{detail}"
-        )
+        raise RuntimeError(f"psql failed (rc={result.returncode}):\n{detail}")
 
 
 def _wait_for_healthy(container: str = "postgres", timeout: int = 60) -> None:
     """Poll Docker health status until *container* is healthy."""
+
     def poll() -> bool:
         result = docker_run(
             ["inspect", "--format", "{{.State.Health.Status}}", container],

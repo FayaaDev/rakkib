@@ -118,9 +118,7 @@ def run(state: State) -> None:
     repo = _repo_dir()
     data_root = state.data_root
     backup_dir = Path(state.get("backup_dir", str(data_root / "backups")))
-    platform = state.get("platform", "linux")
     admin_user = state.get("admin_user")
-    selected = set(state.get("selected_services", []) or [])
     cf_enabled = cloudflare_enabled(state)
     if cf_enabled and not state.has("cloudflared_metrics_port"):
         state.set("cloudflared_metrics_port", "20241")

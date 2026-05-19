@@ -1,6 +1,6 @@
 services:
   ollama-nvidia:
-    image: ${OLLAMA_NVIDIA_IMAGE:-ollama/ollama:latest}
+    image: ${OLLAMA_NVIDIA_IMAGE:-ollama/ollama:0.24.0}
     container_name: ollama-nvidia
     restart: unless-stopped
     env_file:

@@ -11,7 +11,6 @@ import os
 import platform
 import shlex
 import shutil
-import struct
 import subprocess
 import sys
 import tarfile
@@ -278,6 +277,7 @@ def _docker_container_publishes_port(name: str, port: int) -> bool:
     line = result.stdout.strip()
     # Heuristic: port appears in the ports column
     import re
+
     pattern = rf"(:|->){port}(/|->|$)|:{port}->"
     return bool(re.search(pattern, line))
 
@@ -293,12 +293,8 @@ def check_os() -> CheckResult:
     version = ""
     if _command_exists("lsb_release"):
         try:
-            dresult = subprocess.run(
-                ["lsb_release", "-is"], capture_output=True, text=True, check=True
-            )
-            vresult = subprocess.run(
-                ["lsb_release", "-rs"], capture_output=True, text=True, check=True
-            )
+            dresult = subprocess.run(["lsb_release", "-is"], capture_output=True, text=True, check=True)
+            vresult = subprocess.run(["lsb_release", "-rs"], capture_output=True, text=True, check=True)
             distro = dresult.stdout.strip()
             version = vresult.stdout.strip()
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -426,12 +422,7 @@ def docker_access_user(state: State | None = None) -> str:
 
 def docker_access_commands(user: str) -> str:
     if platform.system() == "Darwin":
-        return (
-            "brew install colima docker docker-compose\n"
-            "colima start\n"
-            "docker info\n"
-            "rakkib web"
-        )
+        return "brew install colima docker docker-compose\ncolima start\ndocker info\nrakkib web"
     return (
         "sudo groupadd -f docker\n"
         f"sudo usermod -aG docker {user}\n"
@@ -496,24 +487,16 @@ def _offer_docker_group_rerun(console) -> None:
 
 def handle_docker_permission_denied(console, user: str) -> bool:
     if platform.system() == "Darwin":
-        console.print(
-            "[bold red]Docker is installed, but it is not ready yet.[/bold red]"
-        )
-        console.print(
-            "[yellow]Run `rakkib auth`, then try again.[/yellow]"
-        )
+        console.print("[bold red]Docker is installed, but it is not ready yet.[/bold red]")
+        console.print("[yellow]Run `rakkib auth`, then try again.[/yellow]")
         return False
 
-    console.print(
-        "[bold red]Docker needs permission for this user.[/bold red]"
-    )
+    console.print("[bold red]Docker needs permission for this user.[/bold red]")
     repair_message = prepare_docker_access(user)
     console.print(f"[dim]{repair_message}[/dim]")
     if repair_message.startswith("Docker is ready"):
         _offer_docker_group_rerun(console)
-    console.print(
-        "[yellow]Open a new shell, then rerun Rakkib.[/yellow]"
-    )
+    console.print("[yellow]Open a new shell, then rerun Rakkib.[/yellow]")
     console.print("[dim]Setup command: `rakkib auth`[/dim]")
     return False
 
@@ -534,7 +517,7 @@ def check_docker_prereq(state: State | None = None, console=None) -> bool:
             console.print(f"[dim]{msg}[/dim]")
         if shutil.which("docker") is None:
             if console:
-                    console.print("[bold red]Docker setup failed.[/bold red]")
+                console.print("[bold red]Docker setup failed.[/bold red]")
             return False
         if console:
             console.print("[green]Docker is ready.[/green]")
@@ -972,8 +955,7 @@ def attempt_fix_docker() -> str:
     if result.returncode != 0:
         return f"get.docker.com install failed: {result.stderr.strip() or 'unknown error'}"
 
-    subprocess.run(["sudo", "systemctl", "enable", "--now", "docker"],
-                   capture_output=True, text=True)
+    subprocess.run(["sudo", "systemctl", "enable", "--now", "docker"], capture_output=True, text=True)
     return "Docker installed."
 
 
@@ -996,8 +978,18 @@ def attempt_fix_compose() -> str:
         if lock_error:
             return lock_error
         result = subprocess.run(
-            ["sudo", "env", *[f"{key}={value}" for key, value in PACKAGE_MANAGER_SAFE_ENV.items()], "apt-get", "install", "-y", "-q",
-             "-o", "DPkg::Lock::Timeout=900", "docker-compose-plugin"],
+            [
+                "sudo",
+                "env",
+                *[f"{key}={value}" for key, value in PACKAGE_MANAGER_SAFE_ENV.items()],
+                "apt-get",
+                "install",
+                "-y",
+                "-q",
+                "-o",
+                "DPkg::Lock::Timeout=900",
+                "docker-compose-plugin",
+            ],
             capture_output=True,
             text=True,
             env=_package_manager_env(),
@@ -1019,21 +1011,20 @@ def attempt_fix_compose() -> str:
     plugin_path = Path("/usr/local/lib/docker/cli-plugins/docker-compose")
 
     try:
-        mkdir = subprocess.run(["sudo", "mkdir", "-p", str(plugin_path.parent)],
-                               capture_output=True, text=True)
+        mkdir = subprocess.run(["sudo", "mkdir", "-p", str(plugin_path.parent)], capture_output=True, text=True)
         if mkdir.returncode != 0:
             return f"compose cli-plugins directory creation failed: {mkdir.stderr.strip() or 'unknown error'}"
         result = subprocess.run(
             ["sudo", "curl", "-fsSL", "-o", str(plugin_path), url],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             return f"compose binary download failed: {result.stderr.strip() or 'unknown error'}"
         checksum_error = _verify_download_sha256(plugin_path, expected_sha256)
         if checksum_error:
             return f"compose binary download failed verification: {checksum_error}"
-        chmod = subprocess.run(["sudo", "chmod", "+x", str(plugin_path)],
-                               capture_output=True, text=True)
+        chmod = subprocess.run(["sudo", "chmod", "+x", str(plugin_path)], capture_output=True, text=True)
         if chmod.returncode != 0:
             return f"compose binary chmod failed: {chmod.stderr.strip() or 'unknown error'}"
         verify = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True)

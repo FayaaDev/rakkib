@@ -120,6 +120,4 @@ def _ensure_no_unresolved_placeholders(rendered: str, src_path: Path) -> None:
         return
 
     keys = ", ".join(sorted(set(matches)))
-    raise UnresolvedTemplateError(
-        f"Rendered template {src_path} still contains unresolved placeholder(s): {keys}"
-    )
+    raise UnresolvedTemplateError(f"Rendered template {src_path} still contains unresolved placeholder(s): {keys}")

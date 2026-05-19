@@ -22,13 +22,14 @@ from rakkib.util import RAKKIB_DATA_DIR
 class RegistryError(ValueError):
     """Raised when the service registry cannot be resolved safely."""
 
+
 STEP_MODULES: list[tuple[str, str]] = [
-    ("layout",     "rakkib.steps.layout"),
-    ("caddy",      "rakkib.steps.caddy"),
+    ("layout", "rakkib.steps.layout"),
+    ("caddy", "rakkib.steps.caddy"),
     ("cloudflare", "rakkib.steps.cloudflare"),
-    ("postgres",   "rakkib.steps.postgres"),
-    ("services",   "rakkib.steps.services"),
-    ("cron",       "rakkib.steps.cron"),
+    ("postgres", "rakkib.steps.postgres"),
+    ("services", "rakkib.steps.services"),
+    ("cron", "rakkib.steps.cron"),
 ]
 
 

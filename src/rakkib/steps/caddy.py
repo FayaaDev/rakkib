@@ -51,9 +51,15 @@ def run(state: State) -> None:
     # 6a. Format the candidate Caddyfile.
     docker_run(
         [
-            "run", "--rm",
-            "-v", f"{caddy_next}:/etc/caddy/Caddyfile",
-            "caddy:2", "caddy", "fmt", "--overwrite", "/etc/caddy/Caddyfile",
+            "run",
+            "--rm",
+            "-v",
+            f"{caddy_next}:/etc/caddy/Caddyfile",
+            "caddy:2",
+            "caddy",
+            "fmt",
+            "--overwrite",
+            "/etc/caddy/Caddyfile",
         ],
         check=False,
     )
@@ -61,16 +67,20 @@ def run(state: State) -> None:
     # 6b. Validate candidate before replacing active file.
     validate = docker_run(
         [
-            "run", "--rm",
-            "-v", f"{caddy_next}:/etc/caddy/Caddyfile:ro",
-            "caddy:2", "caddy", "validate", "--config", "/etc/caddy/Caddyfile",
+            "run",
+            "--rm",
+            "-v",
+            f"{caddy_next}:/etc/caddy/Caddyfile:ro",
+            "caddy:2",
+            "caddy",
+            "validate",
+            "--config",
+            "/etc/caddy/Caddyfile",
         ],
         check=False,
     )
     if validate.returncode != 0:
-        raise RuntimeError(
-            f"Caddyfile validation failed: {validate.stderr.strip()}"
-        )
+        raise RuntimeError(f"Caddyfile validation failed: {validate.stderr.strip()}")
 
     # 7-8. Backup existing Caddyfile and promote candidate.
     caddyfile = caddy_dir / "Caddyfile"
@@ -111,9 +121,7 @@ def verify(state: State) -> VerificationResult:
     # Network exists?
     net = docker_run(["network", "inspect", docker_net], check=False)
     if net.returncode != 0:
-        return VerificationResult.failure(
-            "caddy", f"Docker network {docker_net} does not exist"
-        )
+        return VerificationResult.failure("caddy", f"Docker network {docker_net} does not exist")
 
     # Health endpoint responds?
     health = subprocess.run(

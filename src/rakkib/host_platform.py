@@ -13,9 +13,7 @@ def detect_host_platform() -> str:
         return "linux"
     if system == "Darwin":
         return "mac"
-    raise RuntimeError(
-        f"Unsupported platform: {system or 'unknown'}. Rakkib setup supports Linux and macOS."
-    )
+    raise RuntimeError(f"Unsupported platform: {system or 'unknown'}. Rakkib setup supports Linux and macOS.")
 
 
 def ensure_state_platform(state: Any) -> None:

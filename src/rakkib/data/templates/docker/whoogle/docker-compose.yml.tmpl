@@ -1,6 +1,6 @@
 services:
   whoogle:
-    image: ${WHOOGLE_IMAGE:-benbusby/whoogle-search:latest}
+    image: ${WHOOGLE_IMAGE:-benbusby/whoogle-search:1.2.4}
     container_name: whoogle
     restart: unless-stopped
     env_file: .env
