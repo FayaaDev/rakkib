@@ -26,7 +26,7 @@ from rakkib.docker import DockerError, compose_down, docker_run, is_docker_permi
 from rakkib.doctor import (
     attempt_fix_cloudflared,
     attempt_fix_docker,
-    attempt_start_colima,
+    attempt_start_docker_desktop,
     check_disk,
     check_ram,
     docker_access_commands,
@@ -126,11 +126,11 @@ def _run_auth_setup(ctx: click.Context) -> bool:
         try:
             docker_run(["info"])
         except DockerError as exc:
-            console.print(f"[dim]{attempt_start_colima()}[/dim]")
+            console.print(f"[dim]{attempt_start_docker_desktop()}[/dim]")
             try:
                 docker_run(["info"])
             except DockerError as retry_exc:
-                console.print("[red]Docker is not ready. Run `rakkib auth`, then try again.[/red]")
+                console.print("[red]Docker Desktop is not ready. Run `rakkib auth`, then try again.[/red]")
                 console.print(f"[dim]{retry_exc or exc}[/dim]")
                 return False
         console.print("[green]Re-run `rakkib pull`.[/green]")
