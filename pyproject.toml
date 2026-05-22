@@ -33,7 +33,10 @@ rakkib = "rakkib.cli:cli"
 where = ["src"]
 
 [tool.setuptools.package-data]
-rakkib = ["data/**/*"]
+rakkib = [
+  "data/**/*",
+  "data/templates/docker/*/.env.example",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
