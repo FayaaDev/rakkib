@@ -782,11 +782,14 @@ def init(ctx: click.Context) -> None:
     previous_state = State(state.to_dict(), path=state.path)
 
     state = run_interview(state, questions_dir=repo_dir / "data" / "questions")
-    _cleanup_previous_hosting_mode(previous_state, state)
     state.save(state_path)
     console.print("[bold green]Interview complete. State saved to .fss-state.yaml[/bold green]")
 
     if state.is_confirmed():
+        if not ensure_prereqs(state, console=console, cloudflared_bin=_cloudflared_bin()):
+            ctx.exit(1)
+        _cleanup_previous_hosting_mode(previous_state, state)
+        state.save(state_path)
         if not _run_steps(state, repo_dir):
             ctx.exit(1)
         _persist_deployed_selection(state)

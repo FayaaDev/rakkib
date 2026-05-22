@@ -88,7 +88,14 @@ def attempt_start_colima() -> str:
     result = subprocess.run([colima, "start"], capture_output=True, text=True)
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
-        return f"Colima failed to start: {detail}"
+        return (
+            f"Colima failed to start: {detail}\n"
+            "Try:\n"
+            "  colima start --runtime docker --vm-type qemu --mount-type sshfs --cpu 2 --memory 4 --disk 60\n"
+            "  docker context use colima\n"
+            "  docker info\n"
+            "If this Mac is itself a VM, enable nested virtualization or use a real Mac/Linux host."
+        )
     return "Docker started."
 
 
