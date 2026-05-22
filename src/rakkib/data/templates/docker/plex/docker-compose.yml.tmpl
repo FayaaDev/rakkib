@@ -1,19 +1,175 @@
 services:
   plex:
-    image: lscr.io/linuxserver/plex:1.43.1
+    image: plexinc/pms-docker:1.43.2.10687-563d026ea
     container_name: plex
+    network_mode: host
+    restart: unless-stopped
     environment:
-      - PUID=${ADMIN_UID}
-      - PGID=${ADMIN_GID}
-      - TZ=${TZ}
-      - VERSION=docker
-      - PLEX_CLAIM=${PLEX_CLAIM}
+      TZ: ${TZ}
+      PLEX_CLAIM: ${PLEX_CLAIM}
+      PLEX_UID: ${ADMIN_UID}
+      PLEX_GID: ${ADMIN_GID}
     volumes:
       - {{DATA_ROOT}}/data/plex/config:/config
-      - {{DATA_ROOT}}/data/plex/media:/media
+      - {{DATA_ROOT}}/data/plex/transcode:/transcode
+      - {{DATA_ROOT}}/data/plex/media:/data
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:5.27.5
+    container_name: radarr
     restart: unless-stopped
+    environment:
+      PUID: ${ADMIN_UID}
+      PGID: ${ADMIN_GID}
+      TZ: ${TZ}
+      UMASK: ${UMASK}
+    volumes:
+      - {{DATA_ROOT}}/data/plex/radarr/config:/config
+      - {{DATA_ROOT}}/data/plex/media:/data
+    ports:
+      - "127.0.0.1:7878:7878"
     networks:
       - {{DOCKER_NET}}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:7878/ping >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:4.0.17
+    container_name: sonarr
+    restart: unless-stopped
+    environment:
+      PUID: ${ADMIN_UID}
+      PGID: ${ADMIN_GID}
+      TZ: ${TZ}
+      UMASK: ${UMASK}
+    volumes:
+      - {{DATA_ROOT}}/data/plex/sonarr/config:/config
+      - {{DATA_ROOT}}/data/plex/media:/data
+    ports:
+      - "127.0.0.1:8989:8989"
+    networks:
+      - {{DOCKER_NET}}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8989/ping >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:1.37.0
+    container_name: prowlarr
+    restart: unless-stopped
+    environment:
+      PUID: ${ADMIN_UID}
+      PGID: ${ADMIN_GID}
+      TZ: ${TZ}
+      UMASK: ${UMASK}
+    volumes:
+      - {{DATA_ROOT}}/data/plex/prowlarr/config:/config
+    ports:
+      - "127.0.0.1:9696:9696"
+    networks:
+      - {{DOCKER_NET}}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9696/ping >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:5.2.0
+    container_name: qbittorrent
+    restart: unless-stopped
+    environment:
+      PUID: ${ADMIN_UID}
+      PGID: ${ADMIN_GID}
+      TZ: ${TZ}
+      UMASK: ${UMASK}
+      WEBUI_PORT: ${WEBUI_PORT}
+      TORRENTING_PORT: ${TORRENTING_PORT}
+    volumes:
+      - {{DATA_ROOT}}/data/plex/qbittorrent/config:/config
+      - {{DATA_ROOT}}/data/plex/media:/data
+    ports:
+      - "127.0.0.1:8081:8080"
+    networks:
+      - {{DOCKER_NET}}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080 >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  seerr:
+    image: ghcr.io/seerr-team/seerr:v3.0.1
+    init: true
+    container_name: seerr
+    user: "${ADMIN_UID}:${ADMIN_GID}"
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL}
+      TZ: ${TZ}
+      PORT: ${PORT}
+    volumes:
+      - {{DATA_ROOT}}/data/plex/seerr/config:/app/config
+    ports:
+      - "127.0.0.1:5055:5055"
+    networks:
+      - {{DOCKER_NET}}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:5055/api/v1/settings/public || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+  telegram-bot:
+    build: ./telegram-bot
+    container_name: cinema-telegram-bot
+    user: "${ADMIN_UID}:${ADMIN_GID}"
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      SEERR_URL: http://seerr:5055
+      SEERR_API_KEY: ${SEERR_API_KEY}
+      RADARR_URL: http://radarr:7878
+      RADARR_API_KEY: ${RADARR_API_KEY}
+      SONARR_URL: http://sonarr:8989
+      SONARR_API_KEY: ${SONARR_API_KEY}
+      PROWLARR_URL: http://prowlarr:9696
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY}
+      QBITTORRENT_USERNAME: ${QBITTORRENT_USERNAME}
+      QBITTORRENT_PASSWORD: ${QBITTORRENT_PASSWORD}
+      REQUEST_PROFILE_ID: 7
+      REQUEST_ROOT_FOLDER: /data/movies
+      REQUEST_SERVER_ID: 0
+      TV_REQUEST_PROFILE_ID: 6
+      TV_REQUEST_ROOT_FOLDER: /data/tv
+      TV_REQUEST_SERVER_ID: 0
+    depends_on:
+      seerr:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+      sonarr:
+        condition: service_healthy
+    networks:
+      - {{DOCKER_NET}}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import sys; sys.exit(0)'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 networks:
   {{DOCKER_NET}}:

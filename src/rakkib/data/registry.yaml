@@ -456,8 +456,14 @@ services:
     state_bucket: selected_services
     required: false
     optional: true
-    image: lscr.io/linuxserver/plex:latest
-    default_port: 32400
+    resource_requirements:
+      min_ram_mb: 4096
+      recommended_ram_mb: 8192
+      min_disk_gb: 20
+      recommended_disk_gb: 100
+      install_warning: "Automated Home Cinema pulls several media automation images and needs substantial disk space for downloads and media."
+    image: plexinc/pms-docker:latest + lscr.io/linuxserver/radarr:latest + lscr.io/linuxserver/sonarr:latest + lscr.io/linuxserver/prowlarr:latest + lscr.io/linuxserver/qbittorrent:latest + ghcr.io/seerr-team/seerr:latest
+    default_port: 5055
     default_subdomain: plex
     subdomain_key: plex
     subdomain_placeholder: PLEX_SUBDOMAIN
@@ -466,38 +472,94 @@ services:
       - ADMIN_GID
       - TZ
       - PLEX_CLAIM
+      - UMASK
+      - WEBUI_PORT
+      - TORRENTING_PORT
+      - LOG_LEVEL
+      - PORT
+      - TELEGRAM_BOT_TOKEN
+      - TELEGRAM_ALLOWED_USER_IDS
+      - SEERR_API_KEY
+      - RADARR_API_KEY
+      - SONARR_API_KEY
+      - PROWLARR_API_KEY
+      - QBITTORRENT_USERNAME
+      - QBITTORRENT_PASSWORD
     depends_on: []
     host_service: false
     host_port: false
     internal_access:
       enabled: true
       host_port: 13049
-      container_port: 32400
-      path: /web/index.html
+      container_port: 5055
+      path: /api/v1/settings/public
+      compose_service: seerr
     caddy:
       template: plex-public.caddy.tmpl
+    env_preserve_keys:
+      - PLEX_CLAIM
+      - TELEGRAM_BOT_TOKEN
+      - TELEGRAM_ALLOWED_USER_IDS
+      - SEERR_API_KEY
+      - RADARR_API_KEY
+      - SONARR_API_KEY
+      - PROWLARR_API_KEY
+      - QBITTORRENT_USERNAME
+      - QBITTORRENT_PASSWORD
+    secrets:
+      RADARR_API_KEY:
+        factory: hex_key
+        length: 32
+      SONARR_API_KEY:
+        factory: hex_key
+        length: 32
+      PROWLARR_API_KEY:
+        factory: hex_key
+        length: 32
+      QBITTORRENT_USERNAME:
+        value: rakkib
+      QBITTORRENT_PASSWORD:
+        factory: password
+        length: 24
     data_dirs:
       - data/plex/config
+      - data/plex/transcode
       - data/plex/media
+      - data/plex/radarr/config
+      - data/plex/sonarr/config
+      - data/plex/prowlarr/config
+      - data/plex/qbittorrent/config
+      - data/plex/seerr/config
+    extra_templates:
+      - src: templates/docker/plex/telegram-bot/Dockerfile.tmpl
+        dst: docker/plex/telegram-bot/Dockerfile
+      - src: templates/docker/plex/telegram-bot/app.py.tmpl
+        dst: docker/plex/telegram-bot/app.py
+      - src: templates/docker/plex/telegram-bot/requirements.txt.tmpl
+        dst: docker/plex/telegram-bot/requirements.txt
     homepage:
       category: Media
-      name: Plex
-      description: Personal media server
+      name: Automated Home Cinema
+      description: Plex with requests and download automation
       icon: plex.png
     monitoring:
       enabled: true
       type: http
       target: public_url
-      path: /web/index.html
+      path: /api/v1/settings/public
       interval: 60
       timeout: 10
       retries: 3
     smoke:
-      path: /web/index.html
-      expected_text: Plex
-      timeout: 60
-    notes: "Personal media server. Optional. Best-effort linuxserver.io image using bridge networking, not host networking; DLNA/GDM discovery and remote-access auto-mapping may be limited. Set PLEX_CLAIM before first start if the server must be claimed automatically. Media is stored under data/plex/media by default. No privileged hardware transcoding devices are mapped by default; add /dev/dri or GPU runtime support manually if accepted."
+      path: /api/v1/settings/public
+      expected_text: initialized
+      timeout: 120
+    notes: "Automated Home Cinema stack based on /srv/docker/finema. Includes Plex playback, Seerr requests, Radarr/Sonarr automation, Prowlarr indexer management, qBittorrent downloads, and an optional Telegram request bot. Plex uses host networking for LAN discovery and playback on port 32400; Seerr is the public Rakkib route for requests. Radarr, Sonarr, Prowlarr, and qBittorrent bind local-only host ports and should not be exposed publicly without an auth gate. Rakkib generates and wires internal Radarr, Sonarr, Prowlarr, and qBittorrent credentials automatically. Set PLEX_CLAIM before first start if Plex must be claimed automatically. Fill TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, and the Seerr API key after Seerr first-run setup if the Telegram bot is used. Media is stored under data/plex/media. Hardware transcoding devices are not mapped by default."
     hooks:
+      pre_start:
+        - homecinema_seed_configs
+      post_start:
+        - homecinema_configure
       remove:
         - cloudflare_dns_delete
 

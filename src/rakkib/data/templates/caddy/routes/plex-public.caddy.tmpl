@@ -1,5 +1,5 @@
-	# Plex media server
+	# Automated Home Cinema request portal
 	@plex host {{PLEX_SUBDOMAIN}}.{{DOMAIN}}
 	handle @plex {
-		reverse_proxy plex:32400
+		reverse_proxy seerr:5055
 	}

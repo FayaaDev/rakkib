@@ -7,8 +7,12 @@ import os
 import pwd
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from rich.console import Console
 
@@ -786,6 +790,359 @@ def service_postgres_login_preflight(ctx: HookContext, *legacy_args) -> None:
         )
 
 
+def _homecinema_secret(state, key: str) -> str:
+    value = state.get(key)
+    if value is None:
+        value = state.get(f"secrets.values.{key}")
+    if value is None or str(value).strip() == "":
+        raise RuntimeError(f"Automated Home Cinema is missing generated secret {key}. Re-run `rakkib pull`.")
+    return str(value)
+
+
+def _homecinema_arr_config(app_name: str, port: int, api_key: str) -> str:
+    return f"""<Config>
+  <BindAddress>*</BindAddress>
+  <Port>{port}</Port>
+  <SslPort>9898</SslPort>
+  <EnableSsl>False</EnableSsl>
+  <LaunchBrowser>False</LaunchBrowser>
+  <AuthenticationMethod>Forms</AuthenticationMethod>
+  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
+  <Branch>master</Branch>
+  <LogLevel>info</LogLevel>
+  <SslCertPath></SslCertPath>
+  <SslCertPassword></SslCertPassword>
+  <UrlBase></UrlBase>
+  <InstanceName>{app_name}</InstanceName>
+  <UpdateMechanism>Docker</UpdateMechanism>
+  <ApiKey>{api_key}</ApiKey>
+</Config>
+"""
+
+
+def _homecinema_write_if_missing(path: Path, content: str) -> bool:
+    if path.exists():
+        return False
+    _ensure_writable_output(path)
+    path.write_text(content)
+    return True
+
+
+def _homecinema_ensure_dir(path: Path) -> None:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        _repair_ownership(path.parent)
+        path.mkdir(parents=True, exist_ok=True)
+    if not os.access(path, os.W_OK | os.X_OK):
+        _repair_ownership(path)
+
+
+def _homecinema_request(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: bytes | None = None,
+    expected: tuple[int, ...] = (200,),
+    timeout: int = 15,
+) -> tuple[int, str]:
+    request = Request(url, data=body, headers=headers or {}, method=method)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            text = response.read().decode("utf-8", errors="replace")
+            if response.status not in expected:
+                raise RuntimeError(f"HTTP {response.status} from {url}: {text[:300]}")
+            return response.status, text
+    except HTTPError as error:
+        text = error.read().decode("utf-8", errors="replace")
+        if error.code in expected:
+            return error.code, text
+        raise RuntimeError(f"HTTP {error.code} from {url}: {text[:300]}") from error
+    except URLError as error:
+        raise RuntimeError(f"Cannot reach {url}: {error.reason}") from error
+
+
+def _homecinema_json(
+    url: str,
+    *,
+    method: str = "GET",
+    api_key: str | None = None,
+    payload: object | None = None,
+    expected: tuple[int, ...] = (200,),
+) -> object:
+    headers = {"Accept": "application/json"}
+    body = None
+    if api_key:
+        headers["X-Api-Key"] = api_key
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        body = json.dumps(payload).encode("utf-8")
+    _, text = _homecinema_request(url, method=method, headers=headers, body=body, expected=expected)
+    return json.loads(text) if text.strip() else None
+
+
+def _homecinema_form(url: str, data: dict[str, object], *, expected: tuple[int, ...] = (200,)) -> int:
+    body = urlencode({key: str(value) for key, value in data.items()}).encode("utf-8")
+    status, _ = _homecinema_request(
+        url,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        body=body,
+        expected=expected,
+    )
+    return status
+
+
+def _homecinema_wait(url: str, *, api_key: str | None = None, timeout: int = 180) -> None:
+    deadline = time.monotonic() + timeout
+    last_error = "not ready"
+    headers = {"X-Api-Key": api_key} if api_key else None
+    while time.monotonic() < deadline:
+        try:
+            _homecinema_request(url, headers=headers)
+            return
+        except RuntimeError as error:
+            last_error = str(error)
+            time.sleep(2)
+    raise RuntimeError(f"Automated Home Cinema dependency did not become ready at {url}: {last_error}")
+
+
+def homecinema_seed_configs(ctx: HookContext, *legacy_args) -> None:
+    """Seed first-run HomeCinema config files without overwriting user-managed config."""
+    ctx = _coerce_hook_context(ctx, *legacy_args)
+    media_root = ctx.data_root / "data" / "plex" / "media"
+    media_dirs = ("movies", "tv", "downloads/torrents/movies", "downloads/torrents/tv", "downloads/incomplete")
+    for relative in media_dirs:
+        _homecinema_ensure_dir(media_root / relative)
+
+    app_configs = (
+        ("radarr", "Radarr", 7878, "RADARR_API_KEY"),
+        ("sonarr", "Sonarr", 8989, "SONARR_API_KEY"),
+        ("prowlarr", "Prowlarr", 9696, "PROWLARR_API_KEY"),
+    )
+    for service_id, app_name, port, key in app_configs:
+        config_path = ctx.data_root / "data" / "plex" / service_id / "config" / "config.xml"
+        _homecinema_write_if_missing(
+            config_path,
+            _homecinema_arr_config(app_name, port, _homecinema_secret(ctx.state, key)),
+        )
+
+    qbittorrent_conf = ctx.data_root / "data" / "plex" / "qbittorrent" / "config" / "qBittorrent" / "qBittorrent.conf"
+    _homecinema_write_if_missing(
+        qbittorrent_conf,
+        r"""[Application]
+FileLogger\Enabled=true
+
+[BitTorrent]
+Session\DefaultSavePath=/data/downloads/torrents/
+Session\TempPath=/data/downloads/incomplete/
+Session\TempPathEnabled=true
+
+[LegalNotice]
+Accepted=true
+
+[Preferences]
+Downloads\SavePath=/data/downloads/torrents/
+Downloads\TempPath=/data/downloads/incomplete/
+Downloads\TempPathEnabled=true
+WebUI\Address=*
+WebUI\AuthSubnetWhitelist=172.16.0.0/12,127.0.0.1/32
+WebUI\AuthSubnetWhitelistEnabled=true
+WebUI\LocalHostAuth=false
+WebUI\Port=8080
+""",
+    )
+
+
+def _homecinema_configure_qbittorrent(ctx: HookContext) -> None:
+    username = _homecinema_secret(ctx.state, "QBITTORRENT_USERNAME")
+    password = _homecinema_secret(ctx.state, "QBITTORRENT_PASSWORD")
+    base_url = "http://127.0.0.1:8081/api/v2"
+    _homecinema_wait(f"{base_url}/app/version")
+
+    _homecinema_form(
+        f"{base_url}/app/setPreferences",
+        {
+            "json": json.dumps(
+                {
+                    "save_path": "/data/downloads/torrents/",
+                    "temp_path": "/data/downloads/incomplete/",
+                    "temp_path_enabled": True,
+                    "web_ui_username": username,
+                    "web_ui_password": password,
+                    "bypass_local_auth": True,
+                    "bypass_auth_subnet_whitelist_enabled": True,
+                    "bypass_auth_subnet_whitelist": "172.16.0.0/12,127.0.0.1/32",
+                }
+            )
+        },
+    )
+
+    for category, save_path in {
+        "movies": "/data/downloads/torrents/movies",
+        "tv": "/data/downloads/torrents/tv",
+    }.items():
+        status = _homecinema_form(
+            f"{base_url}/torrents/createCategory",
+            {"category": category, "savePath": save_path},
+            expected=(200, 409),
+        )
+        if status == 409:
+            _homecinema_form(f"{base_url}/torrents/editCategory", {"category": category, "savePath": save_path})
+
+
+def _homecinema_configure_arr(
+    *,
+    app_name: str,
+    base_url: str,
+    api_key: str,
+    root_path: str,
+    category: str,
+    category_field: str,
+    recent_priority_field: str,
+    older_priority_field: str,
+    username: str,
+    password: str,
+) -> None:
+    _homecinema_wait(f"{base_url}/ping")
+
+    roots = _homecinema_json(f"{base_url}/api/v3/rootfolder", api_key=api_key)
+    if not any(str(item.get("path")) == root_path for item in roots or [] if isinstance(item, dict)):
+        _homecinema_json(
+            f"{base_url}/api/v3/rootfolder",
+            method="POST",
+            api_key=api_key,
+            payload={"path": root_path},
+            expected=(200, 201, 202),
+        )
+
+    clients = _homecinema_json(f"{base_url}/api/v3/downloadclient", api_key=api_key)
+    if any(str(item.get("name")) == "qBittorrent" for item in clients or [] if isinstance(item, dict)):
+        return
+
+    _homecinema_json(
+        f"{base_url}/api/v3/downloadclient",
+        method="POST",
+        api_key=api_key,
+        payload={
+            "enable": True,
+            "protocol": "torrent",
+            "priority": 1,
+            "removeCompletedDownloads": True,
+            "removeFailedDownloads": True,
+            "name": "qBittorrent",
+            "implementation": "QBittorrent",
+            "implementationName": "qBittorrent",
+            "configContract": "QBittorrentSettings",
+            "fields": [
+                {"name": "host", "value": "qbittorrent"},
+                {"name": "port", "value": 8080},
+                {"name": "useSsl", "value": False},
+                {"name": "urlBase", "value": ""},
+                {"name": "username", "value": username},
+                {"name": "password", "value": password},
+                {"name": category_field, "value": category},
+                {"name": recent_priority_field, "value": 0},
+                {"name": older_priority_field, "value": 0},
+                {"name": "initialState", "value": 0},
+            ],
+            "tags": [],
+        },
+        expected=(200, 201, 202),
+    )
+    console.print(f"[dim]Configured {app_name} download client.[/dim]")
+
+
+def _homecinema_configure_prowlarr(ctx: HookContext) -> None:
+    prowlarr_key = _homecinema_secret(ctx.state, "PROWLARR_API_KEY")
+    radarr_key = _homecinema_secret(ctx.state, "RADARR_API_KEY")
+    sonarr_key = _homecinema_secret(ctx.state, "SONARR_API_KEY")
+    base_url = "http://127.0.0.1:9696"
+    _homecinema_wait(f"{base_url}/ping")
+
+    apps = _homecinema_json(f"{base_url}/api/v1/applications", api_key=prowlarr_key)
+    existing = {str(item.get("name")) for item in apps or [] if isinstance(item, dict)}
+    definitions = [
+        (
+            "Radarr",
+            "Radarr",
+            "RadarrSettings",
+            "http://radarr:7878",
+            radarr_key,
+            [2000, 2010, 2020, 2030, 2040, 2045, 2050, 2060],
+        ),
+        (
+            "Sonarr",
+            "Sonarr",
+            "SonarrSettings",
+            "http://sonarr:8989",
+            sonarr_key,
+            [5000, 5010, 5020, 5030, 5040, 5045, 5050, 5060, 5070, 5080],
+        ),
+    ]
+    for name, implementation, contract, app_url, api_key, categories in definitions:
+        if name in existing:
+            continue
+        _homecinema_json(
+            f"{base_url}/api/v1/applications",
+            method="POST",
+            api_key=prowlarr_key,
+            payload={
+                "name": name,
+                "syncLevel": "fullSync",
+                "implementation": implementation,
+                "implementationName": implementation,
+                "configContract": contract,
+                "fields": [
+                    {"name": "prowlarrUrl", "value": "http://prowlarr:9696"},
+                    {"name": "baseUrl", "value": app_url},
+                    {"name": "apiKey", "value": api_key},
+                    {"name": "syncCategories", "value": categories},
+                    {"name": "animeSyncCategories", "value": []},
+                ],
+                "tags": [],
+            },
+            expected=(200, 201, 202),
+        )
+        console.print(f"[dim]Configured Prowlarr application sync for {name}.[/dim]")
+
+
+def homecinema_configure(ctx: HookContext, *legacy_args) -> None:
+    """Wire HomeCinema internals after containers are up."""
+    ctx = _coerce_hook_context(ctx, *legacy_args)
+    homecinema_seed_configs(ctx)
+
+    username = _homecinema_secret(ctx.state, "QBITTORRENT_USERNAME")
+    password = _homecinema_secret(ctx.state, "QBITTORRENT_PASSWORD")
+    _homecinema_configure_qbittorrent(ctx)
+    _homecinema_configure_arr(
+        app_name="Radarr",
+        base_url="http://127.0.0.1:7878",
+        api_key=_homecinema_secret(ctx.state, "RADARR_API_KEY"),
+        root_path="/data/movies",
+        category="movies",
+        category_field="movieCategory",
+        recent_priority_field="recentMoviePriority",
+        older_priority_field="olderMoviePriority",
+        username=username,
+        password=password,
+    )
+    _homecinema_configure_arr(
+        app_name="Sonarr",
+        base_url="http://127.0.0.1:8989",
+        api_key=_homecinema_secret(ctx.state, "SONARR_API_KEY"),
+        root_path="/data/tv",
+        category="tv",
+        category_field="tvCategory",
+        recent_priority_field="recentTvPriority",
+        older_priority_field="olderTvPriority",
+        username=username,
+        password=password,
+    )
+    _homecinema_configure_prowlarr(ctx)
+
+
 def openclaw_install(ctx: HookContext, *legacy_args) -> None:
     """Install OpenClaw and ensure a minimal local gateway is configured."""
     ctx = _coerce_hook_context(ctx, *legacy_args)
@@ -925,6 +1282,7 @@ POST_RENDER_HOOKS = {
 
 PRE_START_HOOKS = {
     "service_postgres_login_preflight": service_postgres_login_preflight,
+    "homecinema_seed_configs": homecinema_seed_configs,
     "openclaw_install": openclaw_install,
     "claude_install": claude_install,
     "codex_install": codex_install,
@@ -932,6 +1290,7 @@ PRE_START_HOOKS = {
 
 POST_START_HOOKS = {
     "openclaw_gateway_restart": openclaw_gateway_restart,
+    "homecinema_configure": homecinema_configure,
 }
 
 RESTART_HOOKS = {

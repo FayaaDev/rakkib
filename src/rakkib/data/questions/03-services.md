@@ -58,7 +58,7 @@ service_catalog:
       subdomain_key: jellyfin
       default_subdomain: jellyfin
     - slug: plex
-      label: Plex
+      label: Automated Home Cinema
       numeric_alias: 60
       subdomain_key: plex
       default_subdomain: plex
@@ -474,7 +474,7 @@ Automation:
 Media:
   [ ] 7  Immich        — photo library          →  immich.<domain>
   [ ] 9  Jellyfin      — media server           →  jellyfin.<domain>
-  [ ] 60 Plex          — media server; bridge networking →  plex.<domain>
+  [ ] 60 Automated Home Cinema — Plex + requests + download automation →  plex.<domain>
 
 File Sharing:
   [ ] 8  transfer.sh   — public file sharing    →  transfer.<domain>

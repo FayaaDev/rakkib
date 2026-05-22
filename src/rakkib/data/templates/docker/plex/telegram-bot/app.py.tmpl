@@ -1,0 +1,445 @@
+import html
+import logging
+import os
+import signal
+import sys
+import time
+from typing import Any
+from urllib.parse import quote
+
+import requests
+
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger("cinema-telegram-bot")
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("Telegram_Bot")
+ALLOWED_USER_IDS = {
+    int(item.strip())
+    for item in os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").split(",")
+    if item.strip().isdigit()
+}
+SEERR_URL = os.getenv("SEERR_URL", "http://seerr:5055").rstrip("/")
+SEERR_API_KEY = os.getenv("SEERR_API_KEY", "")
+RADARR_URL = os.getenv("RADARR_URL", "http://radarr:7878").rstrip("/")
+RADARR_API_KEY = os.getenv("RADARR_API_KEY", "")
+SONARR_URL = os.getenv("SONARR_URL", "http://sonarr:8989").rstrip("/")
+SONARR_API_KEY = os.getenv("SONARR_API_KEY", "")
+REQUEST_PROFILE_ID = int(os.getenv("REQUEST_PROFILE_ID", "7"))
+REQUEST_ROOT_FOLDER = os.getenv("REQUEST_ROOT_FOLDER", "/data/movies")
+REQUEST_SERVER_ID = int(os.getenv("REQUEST_SERVER_ID", "0"))
+TV_REQUEST_PROFILE_ID = int(os.getenv("TV_REQUEST_PROFILE_ID", "6"))
+TV_REQUEST_ROOT_FOLDER = os.getenv("TV_REQUEST_ROOT_FOLDER", "/data/tv")
+TV_REQUEST_SERVER_ID = int(os.getenv("TV_REQUEST_SERVER_ID", "0"))
+
+MEDIA_CACHE: dict[str, dict[str, Any]] = {}
+RUNNING = True
+
+
+class BotError(Exception):
+    pass
+
+
+def stop(_signum: int, _frame: Any) -> None:
+    global RUNNING
+    RUNNING = False
+
+
+def require_env() -> None:
+    missing = []
+    if not SEERR_API_KEY:
+        missing.append("SEERR_API_KEY")
+    if not RADARR_API_KEY:
+        missing.append("RADARR_API_KEY")
+    if not SONARR_API_KEY:
+        missing.append("SONARR_API_KEY")
+    if missing:
+        raise BotError(f"Missing required environment variables: {', '.join(missing)}")
+
+
+def telegram(method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    response = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}",
+        json=payload or {},
+        timeout=30,
+    )
+    data = response.json() if response.content else {}
+    if not response.ok or not data.get("ok", False):
+        raise BotError(f"Telegram {method} failed: {data or response.text}")
+    return data
+
+
+def seerr_get(path: str, params: dict[str, Any] | None = None) -> Any:
+    response = requests.get(
+        f"{SEERR_URL}{path}",
+        params=params,
+        headers={"X-Api-Key": SEERR_API_KEY},
+        timeout=20,
+    )
+    if not response.ok:
+        raise BotError(f"Seerr GET {path} failed: {response.status_code} {response.text[:300]}")
+    return response.json()
+
+
+def seerr_post(path: str, payload: dict[str, Any]) -> Any:
+    response = requests.post(
+        f"{SEERR_URL}{path}",
+        json=payload,
+        headers={"X-Api-Key": SEERR_API_KEY},
+        timeout=20,
+    )
+    if response.status_code == 409:
+        raise BotError("This item is already requested or already available.")
+    if not response.ok:
+        raise BotError(f"Seerr POST {path} failed: {response.status_code} {response.text[:300]}")
+    return response.json()
+
+
+def radarr_get(path: str, params: dict[str, Any] | None = None) -> Any:
+    query = dict(params or {})
+    query["apikey"] = RADARR_API_KEY
+    response = requests.get(f"{RADARR_URL}{path}", params=query, timeout=20)
+    if not response.ok:
+        raise BotError(f"Radarr GET {path} failed: {response.status_code} {response.text[:300]}")
+    return response.json()
+
+
+def sonarr_get(path: str, params: dict[str, Any] | None = None) -> Any:
+    query = dict(params or {})
+    query["apikey"] = SONARR_API_KEY
+    response = requests.get(f"{SONARR_URL}{path}", params=query, timeout=20)
+    if not response.ok:
+        raise BotError(f"Sonarr GET {path} failed: {response.status_code} {response.text[:300]}")
+    return response.json()
+
+
+def send_message(chat_id: int, text: str, reply_markup: dict[str, Any] | None = None) -> None:
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    telegram("sendMessage", payload)
+
+
+def edit_message(chat_id: int, message_id: int, text: str) -> None:
+    telegram(
+        "editMessageText",
+        {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        },
+    )
+
+
+def answer_callback(callback_id: str, text: str = "") -> None:
+    telegram("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+
+
+def is_allowed(user_id: int) -> bool:
+    return bool(ALLOWED_USER_IDS) and user_id in ALLOWED_USER_IDS
+
+
+def unauthorized_message(user_id: int) -> str:
+    return (
+        "This bot is locked. Add your Telegram user ID to "
+        f"<code>TELEGRAM_ALLOWED_USER_IDS</code> in the Automated Home Cinema .env file.\n\n"
+        f"Your Telegram user ID is: <code>{user_id}</code>"
+    )
+
+
+def help_text(user_id: int) -> str:
+    lock_note = ""
+    if not ALLOWED_USER_IDS:
+        lock_note = (
+            "\n\nBot access is not configured yet. Add this ID to "
+            f"<code>TELEGRAM_ALLOWED_USER_IDS</code>: <code>{user_id}</code>"
+        )
+    return (
+        "<b>Cinema Bot</b>\n"
+        "Commands:\n"
+        "Send a movie or TV/anime name, for example: <code>orb</code>\n"
+        "<code>/queue</code> - show Radarr and Sonarr downloads\n"
+        "<code>/status</code> - show movies and TV series\n"
+        "<code>/status orb</code> - filter movies and TV series\n"
+        "<code>/whoami</code> - show your Telegram user ID\n"
+        "<code>/help</code> - show this help"
+        f"{lock_note}"
+    )
+
+
+def movie_label(movie: dict[str, Any]) -> str:
+    title = movie.get("title") or movie.get("name") or "Untitled"
+    date = movie.get("releaseDate") or movie.get("firstAirDate") or ""
+    year = date[:4] if date else "????"
+    return f"{title} ({year})"
+
+
+def media_kind(item: dict[str, Any]) -> str:
+    return "TV" if item.get("mediaType") == "tv" else "Movie"
+
+
+def handle_search(chat_id: int, query: str) -> None:
+    if not query:
+        send_message(chat_id, "Send a movie or TV/anime name to search, for example: <code>orb</code>")
+        return
+
+    data = seerr_get(f"/api/v1/search?query={quote(query, safe='')}&page=1")
+    media = [item for item in data.get("results", []) if item.get("mediaType") in {"movie", "tv"}][:8]
+    if not media:
+        send_message(chat_id, f"No movie or TV results for <code>{html.escape(query)}</code>.")
+        return
+
+    keyboard = []
+    lines = [f"<b>Results for:</b> <code>{html.escape(query)}</code>"]
+    for item in media:
+        tmdb_id = str(item.get("id"))
+        media_type = item.get("mediaType")
+        cache_key = f"{media_type}:{tmdb_id}"
+        MEDIA_CACHE[cache_key] = item
+        label = movie_label(item)
+        kind = media_kind(item)
+        status = item.get("mediaInfo", {}).get("status") if item.get("mediaInfo") else None
+        status_text = ""
+        if status in {3, 5}:
+            status_text = " - already requested/available"
+        lines.append(f"- <b>{kind}</b> | {html.escape(label)}{status_text}")
+        keyboard.append(
+            [{"text": f"Request {kind} {label[:38]}", "callback_data": f"request:{media_type}:{tmdb_id}"}]
+        )
+
+    send_message(chat_id, "\n".join(lines), {"inline_keyboard": keyboard})
+
+
+def tv_seasons(tmdb_id: str) -> list[int]:
+    data = seerr_get(f"/api/v1/tv/{tmdb_id}")
+    seasons = [season.get("seasonNumber") for season in data.get("seasons", [])]
+    return [season for season in seasons if isinstance(season, int) and season > 0]
+
+
+def handle_request(chat_id: int, message_id: int, media_type: str, tmdb_id: str) -> None:
+    item = MEDIA_CACHE.get(f"{media_type}:{tmdb_id}")
+    label = movie_label(item) if item else f"TMDB {tmdb_id}"
+    if media_type == "tv":
+        seasons = tv_seasons(tmdb_id)
+        if not seasons:
+            raise BotError(f"No requestable seasons found for {label}.")
+        payload = {
+            "mediaType": "tv",
+            "mediaId": int(tmdb_id),
+            "is4k": False,
+            "serverId": TV_REQUEST_SERVER_ID,
+            "profileId": TV_REQUEST_PROFILE_ID,
+            "rootFolder": TV_REQUEST_ROOT_FOLDER,
+            "seasons": seasons,
+        }
+        profile = "HD - 720p/1080p"
+    else:
+        payload = {
+            "mediaType": "movie",
+            "mediaId": int(tmdb_id),
+            "is4k": False,
+            "serverId": REQUEST_SERVER_ID,
+            "profileId": REQUEST_PROFILE_ID,
+            "rootFolder": REQUEST_ROOT_FOLDER,
+        }
+        profile = "Fast HD - 720p/1080p"
+    seerr_post("/api/v1/request", payload)
+    edit_message(
+        chat_id,
+        message_id,
+        f"Requested <b>{html.escape(label)}</b>.\nProfile: <code>{html.escape(profile)}</code>",
+    )
+
+
+def handle_queue(chat_id: int) -> None:
+    radarr_data = radarr_get("/api/v3/queue", {"includeMovie": "true"})
+    radarr_records = radarr_data.get("records", [])[:8]
+    sonarr_records = sonarr_get("/api/v3/queue/details")[:8]
+    if not radarr_records and not sonarr_records:
+        send_message(chat_id, "Radarr and Sonarr queues are empty.")
+        return
+
+    lines = ["<b>Download Queue</b>"]
+    if radarr_records:
+        lines.append("\n<b>Movies</b>")
+    for record in radarr_records:
+        movie = record.get("movie", {}).get("title") or record.get("title") or "Unknown"
+        quality = record.get("quality", {}).get("quality", {}).get("name", "unknown")
+        status = record.get("status", "unknown")
+        timeleft = record.get("timeleft") or "unknown"
+        size_left = record.get("sizeleft") or 0
+        gb_left = size_left / 1024 / 1024 / 1024
+        lines.append(
+            f"- <b>{html.escape(movie)}</b> | {html.escape(quality)} | "
+            f"{html.escape(status)} | {gb_left:.1f} GB left | {html.escape(str(timeleft))}"
+        )
+
+    if sonarr_records:
+        lines.append("\n<b>TV</b>")
+        seen = set()
+        for record in sonarr_records:
+            title = record.get("series", {}).get("title") or record.get("title") or "Unknown"
+            if title in seen:
+                continue
+            seen.add(title)
+            quality = record.get("quality", {}).get("quality", {}).get("name", "unknown")
+            status = record.get("status", "unknown")
+            timeleft = record.get("timeleft") or "unknown"
+            size_left = record.get("sizeleft") or 0
+            gb_left = size_left / 1024 / 1024 / 1024
+            lines.append(
+                f"- <b>{html.escape(title)}</b> | {html.escape(quality)} | "
+                f"{html.escape(status)} | {gb_left:.1f} GB left | {html.escape(str(timeleft))}"
+            )
+    send_message(chat_id, "\n".join(lines))
+
+
+def handle_status(chat_id: int, query: str) -> None:
+    movies = radarr_get("/api/v3/movie")
+    series = sonarr_get("/api/v3/series")
+    if query:
+        matches = [m for m in movies if query.lower() in (m.get("title") or "").lower()]
+        series_matches = [s for s in series if query.lower() in (s.get("title") or "").lower()]
+    else:
+        matches = sorted(movies, key=lambda movie: movie.get("sortTitle") or movie.get("title") or "")
+        series_matches = sorted(series, key=lambda show: show.get("sortTitle") or show.get("title") or "")
+    matches = matches[:10]
+    series_matches = series_matches[:10]
+
+    if not matches and not series_matches:
+        if query:
+            send_message(chat_id, f"No movies or TV series match <code>{html.escape(query)}</code>.")
+        else:
+            send_message(chat_id, "No movies or TV series found.")
+        return
+
+    lines = [f"<b>Status for:</b> <code>{html.escape(query)}</code>" if query else f"<b>Cinema Status</b> ({len(matches)} movies, {len(series_matches)} TV)"]
+
+    if matches:
+        lines.append("\n<b>Movies</b>")
+    for movie in matches:
+        title = movie.get("title") or "Unknown"
+        has_file = "downloaded" if movie.get("hasFile") else "missing"
+        monitored = "yes" if movie.get("monitored") else "no"
+        profile_id = movie.get("qualityProfileId")
+        profile = "Fast HD" if profile_id == 7 else str(profile_id)
+        lines.append(f"- <b>{html.escape(title)}</b> | {has_file} | monitored: {monitored} | profile: {profile}")
+
+    if series_matches:
+        lines.append("\n<b>TV</b>")
+    for show in series_matches:
+        title = show.get("title") or "Unknown"
+        stats = show.get("statistics") or {}
+        total = stats.get("totalEpisodeCount") or stats.get("episodeCount") or 0
+        files = stats.get("episodeFileCount") or 0
+        percent = stats.get("percentOfEpisodes") or 0
+        monitored = "yes" if show.get("monitored") else "no"
+        lines.append(f"- <b>{html.escape(title)}</b> | {files}/{total} episodes | {percent:.0f}% | monitored: {monitored}")
+    send_message(chat_id, "\n".join(lines))
+
+
+def handle_message(message: dict[str, Any]) -> None:
+    chat_id = message["chat"]["id"]
+    user_id = message.get("from", {}).get("id")
+    text = (message.get("text") or "").strip()
+    if not user_id:
+        return
+
+    command, _, arg = text.partition(" ")
+    command = command.split("@", 1)[0].lower()
+
+    if command == "/whoami":
+        send_message(chat_id, f"Your Telegram user ID is: <code>{user_id}</code>")
+        return
+
+    if command in {"/start", "/help"}:
+        send_message(chat_id, help_text(user_id))
+        return
+
+    if not is_allowed(user_id):
+        send_message(chat_id, unauthorized_message(user_id))
+        return
+
+    if command == "/queue":
+        handle_queue(chat_id)
+    elif command == "/status":
+        handle_status(chat_id, arg.strip())
+    elif text.startswith("/"):
+        send_message(chat_id, "Unknown command. Try <code>/help</code>.")
+    else:
+        handle_search(chat_id, text)
+
+
+def handle_callback(callback: dict[str, Any]) -> None:
+    callback_id = callback["id"]
+    user_id = callback.get("from", {}).get("id")
+    message = callback.get("message") or {}
+    chat_id = message.get("chat", {}).get("id")
+    message_id = message.get("message_id")
+    data = callback.get("data") or ""
+    if not user_id or not chat_id or not message_id:
+        return
+
+    if not is_allowed(user_id):
+        answer_callback(callback_id, "Not authorized")
+        return
+
+    if data.startswith("request:"):
+        parts = data.split(":")
+        if len(parts) == 2:
+            media_type, tmdb_id = "movie", parts[1]
+        else:
+            media_type, tmdb_id = parts[1], parts[2]
+        handle_request(chat_id, message_id, media_type, tmdb_id)
+        answer_callback(callback_id, "Requested")
+    else:
+        answer_callback(callback_id)
+
+
+def main() -> int:
+    if not TELEGRAM_TOKEN:
+        logger.info("Telegram bot token is not configured; staying idle until the container is restarted with a token.")
+        while RUNNING:
+            time.sleep(60)
+        return 0
+
+    require_env()
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
+    logger.info("Starting cinema Telegram bot. Allowed users configured: %s", bool(ALLOWED_USER_IDS))
+    offset = 0
+    while RUNNING:
+        try:
+            data = telegram("getUpdates", {"offset": offset, "timeout": 25, "allowed_updates": ["message", "callback_query"]})
+            for update in data.get("result", []):
+                offset = max(offset, update["update_id"] + 1)
+                try:
+                    if "message" in update:
+                        handle_message(update["message"])
+                    elif "callback_query" in update:
+                        handle_callback(update["callback_query"])
+                except Exception as exc:
+                    logger.exception("Failed to handle update")
+                    chat_id = update.get("message", update.get("callback_query", {}).get("message", {})).get("chat", {}).get("id")
+                    if chat_id:
+                        send_message(chat_id, f"Error: <code>{html.escape(str(exc))}</code>")
+        except Exception:
+            logger.exception("Polling failed")
+            time.sleep(5)
+    logger.info("Stopping cinema Telegram bot")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

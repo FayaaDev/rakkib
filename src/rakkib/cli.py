@@ -772,7 +772,7 @@ def cli(ctx: click.Context) -> None:
 def init(ctx: click.Context) -> None:
     """Gather configuration via interview and save to .fss-state.yaml.
 
-    Run `rakkib pull` afterwards to install everything.
+    Confirmed configurations immediately install everything.
     """
     console.print("[bold green]Rakkib init[/bold green]")
 
@@ -787,7 +787,10 @@ def init(ctx: click.Context) -> None:
     console.print("[bold green]Interview complete. State saved to .fss-state.yaml[/bold green]")
 
     if state.is_confirmed():
-        console.print("[dim]Run [bold]rakkib pull[/bold] to install.[/dim]")
+        if not _run_steps(state, repo_dir):
+            ctx.exit(1)
+        _persist_deployed_selection(state)
+        state.save(state_path)
     else:
         console.print("[yellow]State is not confirmed — run `rakkib init` again to complete the interview.[/yellow]")
 
