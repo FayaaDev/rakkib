@@ -31,6 +31,7 @@ from rakkib.doctor import (
     check_ram,
     docker_access_commands,
     docker_access_user,
+    docker_desktop_installed,
     ensure_prereqs,
     process_owners_for_ports,
     prepare_docker_access,
@@ -117,11 +118,11 @@ def _run_auth_setup(ctx: click.Context) -> bool:
 
     if platform.system() == "Darwin":
         console.print("[green]macOS detected.[/green]")
-        if shutil.which("docker") is None:
-            console.print("[dim]Preparing Docker...[/dim]")
+        if not docker_desktop_installed():
+            console.print("[dim]Installing Docker Desktop...[/dim]")
             message = attempt_fix_docker()
             console.print(f"[dim]{message}[/dim]")
-            if shutil.which("docker") is None:
+            if not docker_desktop_installed():
                 return False
         try:
             docker_run(["info"])

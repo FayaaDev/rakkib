@@ -9,6 +9,7 @@ import shutil
 import subprocess
 
 from rakkib.docker import DockerError, docker_run, is_docker_permission_error
+from rakkib.doctor import docker_desktop_installed
 
 
 AUTH_COMMAND = "rakkib auth"
@@ -41,7 +42,7 @@ def check_host_auth_readiness() -> HostAuthStatus:
         return HostAuthStatus(True, "root", "Rakkib is running as root.", command=None)
 
     if platform.system() == "Darwin":
-        if shutil.which("docker") is None:
+        if not docker_desktop_installed():
             return HostAuthStatus(
                 False,
                 "docker_missing",

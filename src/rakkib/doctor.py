@@ -77,12 +77,22 @@ def _macos_tool_cmd(name: str) -> str | None:
     return None
 
 
+def docker_desktop_installed() -> bool:
+    """Return True when the Docker Desktop app bundle is present on macOS.
+
+    The `docker` CLI alone (Homebrew formula, Colima, etc.) does not provide
+    the daemon, so installation decisions on macOS must key off this app
+    bundle rather than `docker` being on PATH.
+    """
+    return Path("/Applications/Docker.app").exists()
+
+
 def attempt_start_docker_desktop(wait_seconds: int = 90) -> str:
     """Open Docker Desktop and wait for the Docker daemon on macOS."""
     if platform.system() != "Darwin":
         return "Docker Desktop is only used on macOS."
     _ensure_macos_tool_path()
-    if not Path("/Applications/Docker.app").exists():
+    if not docker_desktop_installed():
         return "Docker Desktop is not installed. Run `rakkib auth` to install it with Homebrew."
 
     result = subprocess.run(["open", "-a", "Docker"], capture_output=True, text=True)
@@ -127,7 +137,9 @@ PACKAGE_MANAGER_SAFE_ENV = {
     "UCF_FORCE_CONFFOLD": "1",
 }
 
-MACOS_DOCKER_CASK = "docker"
+# Homebrew renamed the Docker Desktop cask: the old `docker` token now
+# installs only the CLI, while the full app ships as `docker-desktop`.
+MACOS_DOCKER_CASK = "docker-desktop"
 
 CLOUDFLARED_VERSION = "2026.3.0"
 CLOUDFLARED_SHA256 = {
@@ -440,7 +452,7 @@ def docker_access_user(state: State | None = None) -> str:
 
 def docker_access_commands(user: str) -> str:
     if platform.system() == "Darwin":
-        return "brew install --cask docker\nopen -a Docker\ndocker info\nrakkib pull"
+        return "brew install --cask docker-desktop\nopen -a Docker\ndocker info\nrakkib pull"
     return (
         "sudo groupadd -f docker\n"
         f"sudo usermod -aG docker {user}\n"
@@ -522,20 +534,25 @@ def handle_docker_permission_denied(console, user: str) -> bool:
 def check_docker_prereq(state: State | None = None, console=None) -> bool:
     """Verify docker and docker compose are available. Install if missing."""
     docker_user = docker_access_user(state)
-    if platform.system() == "Darwin":
+    is_mac = platform.system() == "Darwin"
+    if is_mac:
         _ensure_macos_tool_path()
-    if shutil.which("docker") is None:
-        if platform.system() != "Darwin":
+    # On macOS the `docker` CLI may be on PATH without Docker Desktop, which is
+    # what actually provides the daemon. Gate installation on the app bundle.
+    docker_missing = not docker_desktop_installed() if is_mac else shutil.which("docker") is None
+    if docker_missing:
+        if not is_mac:
             sudo_error = _sudo_install_ready()
             if sudo_error:
                 if console:
                     console.print(f"[bold red]{sudo_error}[/bold red]")
                 return False
-        with progress_spinner("Installing Docker..."):
+        with progress_spinner("Installing Docker Desktop..." if is_mac else "Installing Docker..."):
             msg = attempt_fix_docker()
         if console:
             console.print(f"[dim]{msg}[/dim]")
-        if shutil.which("docker") is None:
+        still_missing = not docker_desktop_installed() if is_mac else shutil.which("docker") is None
+        if still_missing:
             if console:
                 console.print("[bold red]Docker setup failed.[/bold red]")
             return False
