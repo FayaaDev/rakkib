@@ -532,7 +532,7 @@ def handle_docker_permission_denied(console, user: str) -> bool:
 
 
 def check_docker_prereq(state: State | None = None, console=None) -> bool:
-    """Verify docker and docker compose are available. Install if missing."""
+    """Verify docker and docker compose are available. Install where safe."""
     docker_user = docker_access_user(state)
     is_mac = platform.system() == "Darwin"
     if is_mac:
@@ -541,6 +541,14 @@ def check_docker_prereq(state: State | None = None, console=None) -> bool:
     # what actually provides the daemon. Gate installation on the app bundle.
     docker_missing = not docker_desktop_installed() if is_mac else shutil.which("docker") is None
     if docker_missing:
+        if is_mac:
+            if console:
+                console.print("[bold red]Docker Desktop is required before applying services on macOS.[/bold red]")
+                console.print(
+                    "[yellow]Run `rakkib auth` first. Docker Desktop setup can take 10-15 minutes "
+                    "and may require GUI prompts; finish those prompts, then rerun Rakkib.[/yellow]"
+                )
+            return False
         if not is_mac:
             sudo_error = _sudo_install_ready()
             if sudo_error:
@@ -952,9 +960,9 @@ def attempt_fix_docker() -> str:
         brew = _macos_brew_cmd()
         if brew is None:
             return "Homebrew is required. Rerun install.sh, then run `rakkib auth`."
-        result = subprocess.run([brew, "install", "--cask", MACOS_DOCKER_CASK], capture_output=True, text=True)
+        result = subprocess.run([brew, "install", "--cask", MACOS_DOCKER_CASK], text=True)
         if result.returncode != 0:
-            detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            detail = (result.stderr or "").strip() or (result.stdout or "").strip() or "unknown error"
             return f"Docker Desktop setup failed: {detail}"
         _ensure_macos_tool_path()
         start_msg = attempt_start_docker_desktop()

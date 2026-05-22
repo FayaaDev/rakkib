@@ -579,6 +579,8 @@ If your shell cannot find rakkib yet, run one of:
 
 To install local services on macOS, run:
   rakkib auth
+  rakkib init
+  rakkib pull
 
 To uninstall:
   rakkib uninstall --yes

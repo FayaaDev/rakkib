@@ -36,7 +36,7 @@ https://github.com/FayaaDev/rakkib/releases/tag/Demo
 ## Requirements
 
 - Ubuntu 24.04 is the tested production deployment target.
-- macOS is supported for local CLI and web UI use.
+- macOS is supported for local CLI and web UI use; run `rakkib auth` before applying local services so Docker Desktop setup happens explicitly.
 - A sudo-capable admin user is recommended; avoid running as root unless you intentionally accept root-owned install paths.
 - A Cloudflare-managed domain is required for public HTTPS routes.
 

@@ -119,7 +119,7 @@ def _run_auth_setup(ctx: click.Context) -> bool:
     if platform.system() == "Darwin":
         console.print("[green]macOS detected.[/green]")
         if not docker_desktop_installed():
-            console.print("[dim]Installing Docker Desktop...[/dim]")
+            console.print("[dim]Installing Docker Desktop. This can take 10-15 minutes; Homebrew output follows.[/dim]")
             message = attempt_fix_docker()
             console.print(f"[dim]{message}[/dim]")
             if not docker_desktop_installed():
