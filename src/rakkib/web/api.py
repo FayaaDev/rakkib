@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
+from typing import Optional, Union
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -28,7 +29,7 @@ REDACTED_SECRET = "[redacted]"
 class SessionBootstrapRequest(BaseModel):
     """Incoming bootstrap token payload."""
 
-    token: str | None = None
+    token: Optional[str] = None
 
 
 class StatePatchRequest(BaseModel):
@@ -47,7 +48,7 @@ class PhaseAnswersRequest(BaseModel):
 class RunStartRequest(BaseModel):
     """Background run start payload."""
 
-    mode: str | None = None
+    mode: Optional[str] = None
 
 
 def _load_state(state_path: Path) -> State:
@@ -261,7 +262,7 @@ def build_api_router(auth: AuthManager, config: WebRuntimeConfig, run_manager: W
         return snapshot
 
     @router.get("/health")
-    def health() -> dict[str, bool | str]:
+    def health() -> dict[str, Union[bool, str]]:
         return {
             "ok": True,
             "auth_enabled": auth.token_auth_enabled,
@@ -269,7 +270,7 @@ def build_api_router(auth: AuthManager, config: WebRuntimeConfig, run_manager: W
         }
 
     @router.post("/session/bootstrap")
-    def session_bootstrap(payload: SessionBootstrapRequest, response: Response) -> dict[str, bool | str]:
+    def session_bootstrap(payload: SessionBootstrapRequest, response: Response) -> dict[str, Union[bool, str]]:
         response.headers["Cache-Control"] = "no-store"
 
         if not auth.validate_token(payload.token):
@@ -287,7 +288,7 @@ def build_api_router(auth: AuthManager, config: WebRuntimeConfig, run_manager: W
         return {"ok": True, "csrf_token": csrf_token}
 
     @router.get("/session")
-    def session_status(request: Request, response: Response) -> dict[str, bool | str | None]:
+    def session_status(request: Request, response: Response) -> dict[str, Union[bool, str, None]]:
         auth.require_api_auth(request)
         response.headers["Cache-Control"] = "no-store"
         return {
@@ -438,7 +439,7 @@ def build_api_router(auth: AuthManager, config: WebRuntimeConfig, run_manager: W
         return serialize_run_state()
 
     @router.post("/run/start")
-    def start_run(request: Request, response: Response, payload: RunStartRequest | None = None) -> dict[str, object]:
+    def start_run(request: Request, response: Response, payload: Optional[RunStartRequest] = None) -> dict[str, object]:
         auth.require_api_auth(request)
         auth.require_csrf(request)
         response.headers["Cache-Control"] = "no-store"
