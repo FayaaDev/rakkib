@@ -26,12 +26,11 @@ from rakkib.docker import DockerError, compose_down, docker_run, is_docker_permi
 from rakkib.doctor import (
     attempt_fix_cloudflared,
     attempt_fix_docker,
-    attempt_start_docker_desktop,
+    attempt_start_colima,
     check_disk,
     check_ram,
     docker_access_commands,
     docker_access_user,
-    docker_desktop_installed,
     ensure_prereqs,
     process_owners_for_ports,
     prepare_docker_access,
@@ -118,20 +117,20 @@ def _run_auth_setup(ctx: click.Context) -> bool:
 
     if platform.system() == "Darwin":
         console.print("[green]macOS detected.[/green]")
-        if not docker_desktop_installed():
-            console.print("[dim]Installing Docker Desktop. This can take 10-15 minutes; Homebrew output follows.[/dim]")
+        if shutil.which("docker") is None:
+            console.print("[dim]Preparing Docker...[/dim]")
             message = attempt_fix_docker()
             console.print(f"[dim]{message}[/dim]")
-            if not docker_desktop_installed():
+            if shutil.which("docker") is None:
                 return False
         try:
             docker_run(["info"])
         except DockerError as exc:
-            console.print(f"[dim]{attempt_start_docker_desktop()}[/dim]")
+            console.print(f"[dim]{attempt_start_colima()}[/dim]")
             try:
                 docker_run(["info"])
             except DockerError as retry_exc:
-                console.print("[red]Docker Desktop is not ready. Run `rakkib auth`, then try again.[/red]")
+                console.print("[red]Docker is not ready. Run `rakkib auth`, then try again.[/red]")
                 console.print(f"[dim]{retry_exc or exc}[/dim]")
                 return False
         console.print("[green]Re-run `rakkib pull`.[/green]")
@@ -783,14 +782,11 @@ def init(ctx: click.Context) -> None:
     previous_state = State(state.to_dict(), path=state.path)
 
     state = run_interview(state, questions_dir=repo_dir / "data" / "questions")
+    _cleanup_previous_hosting_mode(previous_state, state)
     state.save(state_path)
     console.print("[bold green]Interview complete. State saved to .fss-state.yaml[/bold green]")
 
     if state.is_confirmed():
-        if not ensure_prereqs(state, console=console, cloudflared_bin=_cloudflared_bin()):
-            ctx.exit(1)
-        _cleanup_previous_hosting_mode(previous_state, state)
-        state.save(state_path)
         if not _run_steps(state, repo_dir):
             ctx.exit(1)
         _persist_deployed_selection(state)

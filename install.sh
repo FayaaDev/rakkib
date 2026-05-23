@@ -525,7 +525,7 @@ ensure_venv_install() {
   fi
 
   log "Finishing setup..."
-  run_quiet "Finishing setup" "${venv_dir}/bin/pip" install -q "${INSTALL_DIR}" \
+  run_quiet "Finishing setup" "${venv_dir}/bin/pip" install -q -e "${INSTALL_DIR}" \
     || die "pip install failed. Check the error above and rerun."
 
   mkdir -p "$bin_dir"
@@ -579,8 +579,6 @@ If your shell cannot find rakkib yet, run one of:
 
 To install local services on macOS, run:
   rakkib auth
-  rakkib init
-  rakkib pull
 
 To uninstall:
   rakkib uninstall --yes
