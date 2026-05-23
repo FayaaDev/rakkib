@@ -207,12 +207,15 @@ def _run(
     if env:
         merged_env.update(env)
 
-    result = subprocess.run(
-        cmd,
-        capture_output=capture_output,
-        text=True,
-        env=merged_env,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=capture_output,
+            text=True,
+            env=merged_env,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Command not found: {cmd[0]}") from exc
     if check and result.returncode != 0:
         raise RuntimeError(f"Command failed: {' '.join(cmd)}\nstderr: {result.stderr.strip() if result.stderr else ''}")
     return result
