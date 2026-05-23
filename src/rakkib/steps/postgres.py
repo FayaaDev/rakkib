@@ -202,7 +202,7 @@ def run(state: State) -> None:
     sql = _generate_init_sql(state)
     sql_path = init_dir / "init-services.sql"
     sql_path.write_text(sql)
-    os.chmod(sql_path, 0o600)
+    os.chmod(sql_path, 0o644)
 
     # 4. Render docker-compose.yml.
     render_file(
